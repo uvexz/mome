@@ -24,11 +24,14 @@ import {
   useSidebar,
 } from '@cloudflare/kumo'
 import {
+  ArrowSquareOut,
   DownloadSimple,
   Fingerprint,
   House,
   BookmarkSimple,
   Key,
+  PuzzlePiece,
+  ShareNetwork,
   ShieldCheck,
   Trash,
   UploadSimple,
@@ -63,13 +66,13 @@ import { getUploadUrl } from '#/server/upload'
 
 const settingsSearchSchema = z.object({
   tab: z
-    .enum(['general', 'security', 'api', 'docs'])
+    .enum(['general', 'security', 'share', 'api', 'docs'])
     .transform((value) => (value === 'docs' ? 'api' : value))
     .catch('general')
     .optional(),
 })
 
-type SettingsTab = 'general' | 'security' | 'api'
+type SettingsTab = 'general' | 'security' | 'share' | 'api'
 type NavIcon = React.ComponentType<{ className?: string }>
 
 const SETTINGS_NAV: Array<{
@@ -79,6 +82,7 @@ const SETTINGS_NAV: Array<{
 }> = [
   { value: 'general', label: '通用', icon: UserCircle },
   { value: 'security', label: '安全', icon: ShieldCheck },
+  { value: 'share', label: '快速分享', icon: ShareNetwork },
   { value: 'api', label: 'API 及文档', icon: Key },
 ]
 
@@ -277,9 +281,14 @@ function SettingsShell({
               <DangerSection />
             </div>
           )}
-          {activeTab === 'api' && (
+          {activeTab === 'share' && (
             <div className="grid gap-8">
               <BookmarkletSection />
+              <WebClipperSection />
+            </div>
+          )}
+          {activeTab === 'api' && (
+            <div className="grid gap-8">
               <ApiKeysSection
                 initialKeys={apiKeys}
                 onChanged={onApiKeysChange}
@@ -309,33 +318,168 @@ function BookmarkletSection() {
 
   return (
     <Section title="快速发布书签">
-      <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
-        <a
-          ref={linkRef}
-          href="#"
-          draggable
-          title="拖到浏览器书签栏"
-          aria-label="发布到 mome，拖到浏览器书签栏"
-          onClick={(event) => {
-            if (!bookmarklet) event.preventDefault()
-          }}
-          className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-kumo-base px-3 text-sm font-medium text-kumo-default ring ring-kumo-line hover:bg-kumo-tint focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
-        >
-          <BookmarkSimple size={14} />
-          发布到 mome
-        </a>
-        <ClipboardText
-          text="javascript:…"
-          textToCopy={bookmarklet}
-          size="sm"
-          className="w-full"
-          tooltip={{
-            text: '复制书签代码',
-            copiedText: '已复制书签代码',
-            side: 'top',
-          }}
-          labels={{ copyAction: '复制书签代码' }}
-        />
+      <div className="grid gap-3">
+        <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+          <a
+            ref={linkRef}
+            href="#"
+            draggable
+            title="拖到浏览器书签栏"
+            aria-label="发布到 mome，拖到浏览器书签栏"
+            onClick={(event) => {
+              if (!bookmarklet) event.preventDefault()
+            }}
+            className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-kumo-base px-3 text-sm font-medium text-kumo-default ring ring-kumo-line hover:bg-kumo-tint focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+          >
+            <BookmarkSimple size={14} />
+            发布到 mome
+          </a>
+          <ClipboardText
+            text="javascript:…"
+            textToCopy={bookmarklet}
+            size="sm"
+            className="w-full"
+            tooltip={{
+              text: '复制书签代码',
+              copiedText: '已复制书签代码',
+              side: 'top',
+            }}
+            labels={{ copyAction: '复制书签代码' }}
+          />
+        </div>
+        <Text variant="secondary" size="sm">
+          将此书签拖动到书签栏以快速分享
+        </Text>
+      </div>
+    </Section>
+  )
+}
+
+function WebClipperSection() {
+  const navigate = useNavigate()
+  const origin = typeof window === 'undefined' ? '' : window.location.origin
+
+  return (
+    <Section
+      title="浏览器扩展（Web Clipper）"
+      description="Chrome / Edge 扩展，把网页、选中文本和链接一键保存到 mome。"
+    >
+      <div className="grid gap-8 lg:grid-cols-2">
+        <div className="grid gap-4">
+          <h3 className="text-sm font-semibold text-kumo-default">安装</h3>
+          <ol className="grid list-decimal gap-4 pl-5 marker:font-medium marker:text-kumo-subtle">
+            <li>
+              <div className="flex flex-wrap items-center gap-2">
+                <span>创建 API key，扩展需要它来替你保存内容</span>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  className="h-8"
+                  onClick={() =>
+                    void navigate({
+                      to: '/settings',
+                      search: { tab: 'api' },
+                    })
+                  }
+                >
+                  前往创建
+                </Button>
+              </div>
+            </li>
+            <li>
+              <div className="grid gap-2">
+                <span>获取扩展源码</span>
+                <div className="flex flex-wrap gap-2">
+                  <a
+                    href="https://github.com/uvexz/mome/tree/main/extensions/web-clipper"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-kumo-base px-3 text-sm font-medium text-kumo-default ring ring-kumo-line hover:bg-kumo-tint focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                  >
+                    <PuzzlePiece size={14} />
+                    查看 extensions/web-clipper
+                    <ArrowSquareOut size={12} />
+                  </a>
+                  <a
+                    href="https://github.com/uvexz/mome/archive/refs/heads/main.zip"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-kumo-base px-3 text-sm font-medium text-kumo-default ring ring-kumo-line hover:bg-kumo-tint focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+                  >
+                    <DownloadSimple size={14} />
+                    下载仓库 ZIP
+                  </a>
+                </div>
+              </div>
+            </li>
+            <li>
+              <div className="grid gap-2">
+                <span>加载扩展</span>
+                <Text variant="secondary" size="sm">
+                  打开{' '}
+                  <code className="rounded bg-kumo-tint px-1 py-0.5 font-mono text-xs">
+                    chrome://extensions
+                  </code>
+                  （Edge 为{' '}
+                  <code className="rounded bg-kumo-tint px-1 py-0.5 font-mono text-xs">
+                    edge://extensions
+                  </code>
+                  ），开启右上角「开发者模式」，点击「加载已解压的扩展程序」，选择解压后的{' '}
+                  <code className="rounded bg-kumo-tint px-1 py-0.5 font-mono text-xs">
+                    extensions/web-clipper
+                  </code>{' '}
+                  文件夹。
+                </Text>
+              </div>
+            </li>
+            <li>
+              <div className="grid gap-2">
+                <span>填写设置</span>
+                <Text variant="secondary" size="sm">
+                  点击工具栏的扩展图标 →「设置」，填写实例地址
+                  {origin && (
+                    <code className="mx-1 rounded bg-kumo-tint px-1 py-0.5 font-mono text-xs">
+                      {origin}
+                    </code>
+                  )}
+                  和刚才创建的 API key。
+                </Text>
+              </div>
+            </li>
+          </ol>
+        </div>
+
+        <div className="grid gap-4">
+          <h3 className="text-sm font-semibold text-kumo-default">使用</h3>
+          <ul className="grid list-disc gap-4 pl-5 marker:text-kumo-subtle">
+            <li>
+              <div className="grid gap-1">
+                <span className="font-medium">工具栏弹窗</span>
+                <Text variant="secondary" size="sm">
+                  点击工具栏的 mome
+                  图标，编辑标题、摘要或选中文本、标签和可见性，然后保存。
+                </Text>
+              </div>
+            </li>
+            <li>
+              <div className="grid gap-1">
+                <span className="font-medium">右键快速保存</span>
+                <Text variant="secondary" size="sm">
+                  在网页空白处、选中的文字或链接上右键，选择「保存到
+                  mome」立即保存。
+                </Text>
+              </div>
+            </li>
+            <li>
+              <div className="grid gap-1">
+                <span className="font-medium">隐私</span>
+                <Text variant="secondary" size="sm">
+                  API key 只保存在浏览器本地，不会上传到其他服务。
+                </Text>
+              </div>
+            </li>
+          </ul>
+        </div>
       </div>
     </Section>
   )
