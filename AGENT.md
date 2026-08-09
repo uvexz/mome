@@ -25,9 +25,6 @@ bun run format          # Prettier + eslint --fix
 bun run db:generate     # schema 变更后生成迁移
 bun run db:migrate      # 执行迁移（libsql，兼容 file:/libsql:）
 bun run db:studio       # Drizzle Studio
-bun run test            # hashtags 单测（vitest）
-bun run test:integration # 数据层集成测试（scripts/integration-test.ts）
-bun run e2e             # 浏览器端到端测试（scripts/e2e.mjs，需 dev server）
 ```
 
 `src/routeTree.gen.ts` 由插件自动生成，**不要手改**。
@@ -38,7 +35,7 @@ bun run e2e             # 浏览器端到端测试（scripts/e2e.mjs，需 dev s
 - 数据读写一律走 `createServerFn`（`src/server/`），GET 取数 / POST 变更；认证用 `src/server/middleware.ts` 的 authMiddleware（未登录 `throw redirect({ to: '/login' })`）
 - 路由级守卫用 `beforeLoad`；筛选状态放 URL search params（`?tag= ?q= ?filter=`），保持类型安全
 - server function 返回值必须可序列化；不允许闭包捕获客户端变量
-- 纯逻辑（如 `#标签` 解析 `src/lib/hashtags.ts`）保持无依赖、配 vitest 单测
+- 纯逻辑（如 `#标签` 解析 `src/lib/hashtags.ts`）保持无依赖
 - 数据模型：better-auth 四表 + `memos` / `tags` / `memo_tags`；标签由 content 解析并在同一事务同步
 
 ## 设计规范（Vercel/Geist × Kumo，写 UI 代码前必读）

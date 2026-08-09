@@ -18,10 +18,7 @@
     "db:migrate": "tsx --env-file=.env.local scripts/migrate.mjs",
     "db:push": "drizzle-kit push",
     "db:pull": "drizzle-kit pull",
-    "db:studio": "drizzle-kit studio",
-    "test": "vitest run",
-    "test:integration": "tsx --env-file=.env.local scripts/integration-test.ts",
-    "e2e": "bun scripts/e2e.mjs"
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1106.0",
@@ -61,12 +58,10 @@
     "@vitejs/plugin-react": "^6.0.1",
     "dotenv": "^17.3.1",
     "eslint": "^9.20.0",
-    "playwright": "^1.62.1",
     "prettier": "^3.8.1",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2",
-    "vite": "^8.0.0",
-    "vitest": "^4.1.10"
+    "vite": "^8.0.0"
   },
   "pnpm": {
     "onlyBuiltDependencies": [
