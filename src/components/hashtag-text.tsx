@@ -12,6 +12,8 @@ import ReactMarkdown from 'react-markdown'
 import type { Components } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
+import { renderMemoReferences } from '#/lib/memo-links'
+
 /** 标签点击回调（未提供时默认跳到首页按标签筛选） */
 const HashtagClickContext = createContext<((tag: string) => void) | null>(null)
 
@@ -39,7 +41,7 @@ export const HashtagText = memo(function HashtagText({
           remarkPlugins={[remarkGfm]}
           components={markdownComponents}
         >
-          {content}
+          {renderMemoReferences(content)}
         </ReactMarkdown>
       </span>
     </HashtagClickContext.Provider>
@@ -87,16 +89,19 @@ const markdownComponents: Components = {
   del: ({ children }) => (
     <del className="text-kumo-subtle">{transformInline(children)}</del>
   ),
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noreferrer"
-      className="font-medium text-kumo-link hover:underline"
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => {
+    const internal = href?.startsWith('/memo/')
+    return (
+      <a
+        href={href}
+        target={internal ? undefined : '_blank'}
+        rel={internal ? undefined : 'noreferrer'}
+        className="font-medium text-kumo-link hover:underline"
+      >
+        {children}
+      </a>
+    )
+  },
   code: ({ children }) => (
     <code className="rounded bg-kumo-tint px-1 font-mono text-[0.9em] text-kumo-default">
       {children}

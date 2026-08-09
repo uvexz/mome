@@ -1,13 +1,26 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useCallback, useEffect, useState } from 'react'
-import { Button, Loader, Text } from '@cloudflare/kumo'
-import { ArrowLeft, Shuffle, Sparkle } from '@phosphor-icons/react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Button, Loader, Select } from '@cloudflare/kumo'
+import {
+  ArrowClockwise,
+  ArrowLeft,
+  Quotes,
+  Sparkle,
+} from '@phosphor-icons/react'
 
 import { HashtagText } from '#/components/hashtag-text'
-import { getRandomMemos } from '#/server/memos'
-import type { MemoWithTags } from '#/server/memos'
-import { getSessionUser } from '#/server/session'
 import { relativeTime } from '#/lib/date'
+import { getReviewMemos } from '#/server/memos'
+import type { MemoWithTags, ReviewMode } from '#/server/memos'
+import { getSessionUser } from '#/server/session'
+import { listTags } from '#/server/tags'
+import type { TagWithCount } from '#/server/tags'
+
+const MODES: Array<{ value: ReviewMode; label: string }> = [
+  { value: 'least-reviewed', label: '较少回顾' },
+  { value: 'on-this-day', label: '那年今日' },
+  { value: 'random', label: '随机' },
+]
 
 export const Route = createFileRoute('/review')({
   beforeLoad: async () => {
@@ -20,23 +33,39 @@ export const Route = createFileRoute('/review')({
 function Review() {
   const navigate = useNavigate()
   const [items, setItems] = useState<MemoWithTags[] | null>(null)
+  const [tags, setTags] = useState<TagWithCount[]>([])
+  const [mode, setMode] = useState<ReviewMode>('least-reviewed')
+  const [tag, setTag] = useState<string | undefined>()
   const [loading, setLoading] = useState(false)
 
-  const shuffle = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true)
     try {
-      const res = await getRandomMemos({ data: { n: 8 } })
-      setItems(res)
+      const result = await getReviewMemos({
+        data: {
+          mode,
+          n: 8,
+          tag,
+          tzOffsetMinutes: new Date().getTimezoneOffset(),
+        },
+      })
+      setItems(result)
     } finally {
       setLoading(false)
     }
+  }, [mode, tag])
+
+  useEffect(() => {
+    void listTags()
+      .then(setTags)
+      .catch(() => {})
   }, [])
 
-  // 首次进入自动抽一批
   useEffect(() => {
-    if (items === null && !loading) void shuffle()
-    // 仅在挂载时执行一次
-  }, [])
+    void load()
+  }, [load])
+
+  const tagItems = useMemo(() => buildTagItems(tags), [tags])
 
   return (
     <div className="min-h-dvh">
@@ -57,45 +86,93 @@ function Review() {
           <div className="flex-1" />
           <Button
             variant="secondary"
-            size="sm"
-            icon={<Shuffle size={14} />}
+            shape="square"
+            icon={<ArrowClockwise size={15} />}
             loading={loading}
-            onClick={() => void shuffle()}
-          >
-            再来一批
-          </Button>
+            aria-label="刷新回顾"
+            title="刷新回顾"
+            onClick={() => void load()}
+          />
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-8">
-        <Text variant="secondary" DANGEROUS_className="mb-6">
-          随机翻出过往的碎片，让灵感再次相遇。
-        </Text>
+      <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-6">
+        <div className="grid gap-3 sm:grid-cols-[1fr_200px]">
+          <div className="grid grid-cols-3 gap-1 rounded-lg bg-kumo-tint p-0.5 text-sm">
+            {MODES.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                onClick={() => setMode(item.value)}
+                className={
+                  mode === item.value
+                    ? 'rounded-md bg-kumo-base px-2 py-1.5 font-medium text-kumo-strong ring ring-kumo-line'
+                    : 'rounded-md px-2 py-1.5 font-medium text-kumo-subtle hover:text-kumo-default'
+                }
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+          <Select
+            aria-label="按标签回顾"
+            size="sm"
+            value={tag ?? 'all'}
+            items={tagItems}
+            onValueChange={(value) =>
+              setTag(!value || value === 'all' ? undefined : value)
+            }
+          />
+        </div>
 
         {items === null ? (
           <div className="flex justify-center py-16">
-            <Loader size="base" />
+            <Loader />
           </div>
         ) : items.length === 0 ? (
           <p className="py-16 text-center text-sm text-kumo-subtle">
-            还没有 memo，先去写一条吧。
+            当前范围内没有可回顾的 memo。
           </p>
         ) : (
-          <div className="grid gap-2">
+          <div className="mt-6 grid gap-2">
             {items.map((memo) => (
               <article
                 key={memo.id}
-                className="rounded-xl bg-kumo-base px-5 py-4 ring ring-kumo-line"
+                className="rounded-lg bg-kumo-base px-5 py-4 ring ring-kumo-line"
               >
                 <div className="text-sm leading-relaxed text-kumo-default">
                   <HashtagText content={memo.content} />
                 </div>
-                <time
-                  dateTime={memo.createdAt}
-                  className="mt-2.5 block font-mono text-xs text-kumo-subtle"
-                >
-                  {relativeTime(memo.createdAt)}
-                </time>
+                <div className="mt-2.5 flex items-center justify-between gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      void navigate({
+                        to: '/memo/$memoId',
+                        params: { memoId: memo.id },
+                      })
+                    }
+                    className="font-mono text-xs text-kumo-subtle hover:text-accent"
+                  >
+                    <time dateTime={memo.createdAt}>
+                      {relativeTime(memo.createdAt)}
+                    </time>
+                  </button>
+                  <Button
+                    variant="ghost"
+                    shape="square"
+                    size="xs"
+                    icon={<Quotes size={14} />}
+                    aria-label="引用到新 memo"
+                    title="引用到新 memo"
+                    onClick={() =>
+                      void navigate({
+                        to: '/capture',
+                        search: { reference: memo.id },
+                      })
+                    }
+                  />
+                </div>
               </article>
             ))}
           </div>
@@ -103,4 +180,21 @@ function Review() {
       </main>
     </div>
   )
+}
+
+function buildTagItems(tags: TagWithCount[]): Record<string, string> {
+  const byId = new Map(tags.map((tag) => [tag.id, tag]))
+  const items: Record<string, string> = { all: '全部标签' }
+  for (const tag of tags) {
+    const path = [tag.name]
+    let parentId = tag.parentId
+    while (parentId) {
+      const parent = byId.get(parentId)
+      if (!parent) break
+      path.unshift(parent.name)
+      parentId = parent.parentId
+    }
+    items[path.join('/')] = `#${path.join('/')} · ${tag.count}`
+  }
+  return items
 }

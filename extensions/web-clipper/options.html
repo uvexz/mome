@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mome Web Clipper 设置</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main>
+      <h1>mome Web Clipper</h1>
+      <form id="settings-form">
+        <label>
+          mome 实例地址
+          <input
+            id="base-url"
+            type="url"
+            placeholder="https://mome.example.com"
+            required
+          />
+        </label>
+        <label>
+          API key
+          <input
+            id="api-key"
+            type="password"
+            placeholder="mome_xxxxxxxxxxxxxxxx"
+            required
+          />
+        </label>
+        <p class="hint">API key 可在 mome 设置页创建，只保存在本机浏览器中。</p>
+        <p id="status" role="status"></p>
+        <button type="submit">保存设置</button>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

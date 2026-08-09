@@ -13,8 +13,12 @@ interface MemoFeedProps {
   onLoadMore: () => void
   onTogglePin: (memo: MemoWithTags) => void
   onEdit: (memo: MemoWithTags) => void
+  onReference: (memo: MemoWithTags) => void
   onToggleArchive: (memo: MemoWithTags) => void
   onDelete: (memo: MemoWithTags) => void
+  deleted?: boolean
+  onRestore?: (memo: MemoWithTags) => void
+  onPurge?: (memo: MemoWithTags) => void
   onToggleVisibility: (memo: MemoWithTags) => void
   onLike: (memo: MemoWithTags) => void
   onFavorite: (memo: MemoWithTags) => void
@@ -23,14 +27,20 @@ interface MemoFeedProps {
 }
 
 /** 条目展示时间：转发按转发时间，memo 按创建时间 */
-function itemTime(item: TimelineItem): number {
+function itemTime(item: TimelineItem, deleted: boolean): number {
+  if (deleted && item.memo.deletedAt) {
+    return new Date(item.memo.deletedAt).getTime()
+  }
   return item.kind === 'repost' && item.repost
     ? new Date(item.repost.createdAt).getTime()
     : new Date(item.memo.createdAt).getTime()
 }
 
 /** 按本地日期分组（今天/昨天/日期） */
-function groupByDay(items: TimelineItem[]): Array<{
+function groupByDay(
+  items: TimelineItem[],
+  deleted: boolean,
+): Array<{
   label: string
   date: string
   items: TimelineItem[]
@@ -38,7 +48,7 @@ function groupByDay(items: TimelineItem[]): Array<{
   const groups: Array<{ label: string; date: string; items: TimelineItem[] }> =
     []
   for (const memo of items) {
-    const d = new Date(itemTime(memo))
+    const d = new Date(itemTime(memo, deleted))
     const dateKey = `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
     const last = groups.at(-1)
     if (last && last.date === dateKey) {
@@ -60,8 +70,12 @@ export function MemoFeed({
   onLoadMore,
   onTogglePin,
   onEdit,
+  onReference,
   onToggleArchive,
   onDelete,
+  deleted = false,
+  onRestore,
+  onPurge,
   onToggleVisibility,
   onLike,
   onFavorite,
@@ -69,7 +83,7 @@ export function MemoFeed({
   onRepost,
 }: MemoFeedProps) {
   const sentinelRef = useRef<HTMLDivElement>(null)
-  const groups = useMemo(() => groupByDay(items), [items])
+  const groups = useMemo(() => groupByDay(items, deleted), [deleted, items])
 
   useEffect(() => {
     const el = sentinelRef.current
@@ -103,11 +117,15 @@ export function MemoFeed({
                 memo={item.memo}
                 author={item.author}
                 repost={item.repost}
-                onTogglePin={onTogglePin}
-                onEdit={onEdit}
-                onToggleArchive={onToggleArchive}
-                onDelete={onDelete}
-                onToggleVisibility={onToggleVisibility}
+                deleted={deleted}
+                onTogglePin={deleted ? undefined : onTogglePin}
+                onEdit={deleted ? undefined : onEdit}
+                onReference={deleted ? undefined : onReference}
+                onToggleArchive={deleted ? undefined : onToggleArchive}
+                onDelete={deleted ? undefined : onDelete}
+                onRestore={deleted ? onRestore : undefined}
+                onPurge={deleted ? onPurge : undefined}
+                onToggleVisibility={deleted ? undefined : onToggleVisibility}
                 onLike={onLike}
                 onFavorite={onFavorite}
                 onComment={onComment}

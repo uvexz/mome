@@ -4,7 +4,17 @@ import { z } from 'zod'
 export const homeSearchSchema = z.object({
   tag: z.string().optional(),
   q: z.string().max(200).optional(),
-  filter: z.enum(['all', 'archived']).optional(),
+  filter: z.enum(['all', 'archived', 'deleted']).optional(),
+  visibility: z.enum(['public', 'private']).optional(),
+  favorited: z.boolean().optional(),
+  from: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
+  to: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/)
+    .optional(),
 })
 
 export type HomeSearch = z.infer<typeof homeSearchSchema>

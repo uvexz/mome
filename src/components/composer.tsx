@@ -8,54 +8,194 @@ import {
 } from '@phosphor-icons/react'
 
 import { cn } from '#/lib/utils'
+import { authClient } from '#/lib/auth-client'
+import {
+  clearComposerDraft,
+  enqueueMemo,
+  listQueuedMemos,
+  loadComposerDraft,
+  removeQueuedMemo,
+  saveComposerDraft,
+} from '#/lib/composer-storage'
 import { uploadPresignedPost } from '#/lib/upload'
 import { getAppConfig } from '#/server/config'
 import { createMemo } from '#/server/memos'
 import type { MemoWithTags } from '#/server/memos'
 import { getUploadUrl } from '#/server/upload'
 
+function isBrowserOnline(): boolean {
+  return navigator.onLine
+}
+
 interface ComposerProps {
   onCreated: (memo: MemoWithTags) => void
   onError: (message: string) => void
+  onQueued?: () => void
+  initialContent?: string
+  initialVisibility?: 'public' | 'private'
+  draftScope?: string
 }
 
 /**
  * 快速输入框：多行自适应、⌘/Ctrl+Enter 提交、
  * 发布前选择可见性，支持插入图片（S3 或 base64 回退）。
  */
-export function Composer({ onCreated, onError }: ComposerProps) {
+export function Composer({
+  onCreated,
+  onError,
+  onQueued,
+  initialContent = '',
+  initialVisibility,
+  draftScope = 'home',
+}: ComposerProps) {
+  const { data: session } = authClient.useSession()
   const [content, setContent] = useState('')
   const [visibility, setVisibility] = useState<'public' | 'private'>('private')
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [s3Enabled, setS3Enabled] = useState(false)
+  const [draftStatus, setDraftStatus] = useState<
+    'idle' | 'saving' | 'saved' | 'queued'
+  >('idle')
   const contentRef = useRef('')
   const fileRef = useRef<HTMLInputElement>(null)
-  const configLoadedRef = useRef(false)
+  const initializedRef = useRef(false)
+  const draftKeyRef = useRef<string | null>(null)
+  const onCreatedRef = useRef(onCreated)
+  const onErrorRef = useRef(onError)
+  onCreatedRef.current = onCreated
+  onErrorRef.current = onError
   contentRef.current = content
 
   useEffect(() => {
-    void getAppConfig()
-      .then((config) => {
-        setS3Enabled(config.s3Enabled)
-        if (!configLoadedRef.current) {
-          configLoadedRef.current = true
-          setVisibility(config.defaultVisibility)
+    const userId = session?.user.id
+    if (!userId) return
+    const key = `${userId}:${draftScope}`
+    draftKeyRef.current = key
+    let cancelled = false
+
+    void Promise.all([
+      getAppConfig().catch(() => null),
+      loadComposerDraft(key).catch(() => null),
+    ]).then(([config, draft]) => {
+      if (cancelled) return
+      setS3Enabled(config?.s3Enabled ?? false)
+      setContent(initialContent.trim() || draft?.content || '')
+      setVisibility(
+        initialVisibility ??
+          draft?.visibility ??
+          config?.defaultVisibility ??
+          'private',
+      )
+      initializedRef.current = true
+      if (draft?.content && !initialContent.trim()) setDraftStatus('saved')
+    })
+
+    return () => {
+      cancelled = true
+    }
+  }, [draftScope, initialContent, initialVisibility, session?.user.id])
+
+  useEffect(() => {
+    const key = draftKeyRef.current
+    if (!key || !initializedRef.current) return
+    setDraftStatus('saving')
+    const timer = window.setTimeout(() => {
+      const operation = content.trim()
+        ? saveComposerDraft(key, {
+            content,
+            visibility,
+            updatedAt: Date.now(),
+          })
+        : clearComposerDraft(key)
+      void operation
+        .then(() => setDraftStatus(content.trim() ? 'saved' : 'idle'))
+        .catch(() => setDraftStatus('idle'))
+    }, 350)
+    return () => window.clearTimeout(timer)
+  }, [content, visibility])
+
+  useEffect(() => {
+    let flushing = false
+    async function flushOutbox() {
+      if (flushing || !isBrowserOnline()) return
+      flushing = true
+      try {
+        const queued = await listQueuedMemos()
+        for (const item of queued) {
+          try {
+            const memo = await createMemo({
+              data: {
+                content: item.content,
+                visibility: item.visibility,
+                clientId: item.id,
+              },
+            })
+            await removeQueuedMemo(item.id)
+            if (!memo.deletedAt) onCreatedRef.current(memo)
+          } catch (error) {
+            if (!isBrowserOnline()) break
+            onErrorRef.current(
+              error instanceof Error ? error.message : '离线内容发送失败',
+            )
+            break
+          }
         }
-      })
-      .catch(() => setS3Enabled(false))
+      } finally {
+        flushing = false
+      }
+    }
+
+    void flushOutbox()
+    window.addEventListener('online', flushOutbox)
+    return () => window.removeEventListener('online', flushOutbox)
   }, [])
 
   async function submit() {
     const text = content.trim()
     if (!text || submitting) return
+    const clientId = crypto.randomUUID()
     setSubmitting(true)
     try {
-      const memo = await createMemo({ data: { content: text, visibility } })
+      if (!navigator.onLine) {
+        await enqueueMemo({
+          id: clientId,
+          content: text,
+          visibility,
+          createdAt: Date.now(),
+        })
+        setContent('')
+        setDraftStatus('queued')
+        if (draftKeyRef.current) {
+          await clearComposerDraft(draftKeyRef.current)
+        }
+        onQueued?.()
+        return
+      }
+
+      const memo = await createMemo({
+        data: { content: text, visibility, clientId },
+      })
       setContent('')
-      onCreated(memo)
+      setDraftStatus('idle')
+      if (draftKeyRef.current) {
+        await clearComposerDraft(draftKeyRef.current)
+      }
+      if (!memo.deletedAt) onCreated(memo)
     } catch (err) {
-      onError(err instanceof Error ? err.message : '发布失败，请重试')
+      if (!navigator.onLine) {
+        await enqueueMemo({
+          id: clientId,
+          content: text,
+          visibility,
+          createdAt: Date.now(),
+        })
+        setContent('')
+        setDraftStatus('queued')
+        onQueued?.()
+      } else {
+        onError(err instanceof Error ? err.message : '发布失败，请重试')
+      }
     } finally {
       setSubmitting(false)
     }
@@ -184,7 +324,9 @@ export function Composer({ onCreated, onError }: ComposerProps) {
         </div>
         <div className="flex items-center gap-3">
           <span className="hidden font-mono text-xs text-kumo-subtle sm:inline">
-            ⌘/Ctrl + Enter 发送
+            {draftStatus === 'saving' && '保存中'}
+            {draftStatus === 'saved' && '草稿已保存'}
+            {draftStatus === 'queued' && '已加入待发送'}
           </span>
           <Button
             size="sm"

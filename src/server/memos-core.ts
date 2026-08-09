@@ -6,18 +6,27 @@ import {
   eq,
   gte,
   inArray,
+  isNotNull,
   isNull,
-  like,
   lt,
+  ne,
   or,
   sql,
 } from 'drizzle-orm'
 import type { SQL } from 'drizzle-orm'
 
 import { db } from '#/db'
-import { memos, memoTags, tags } from '#/db/schema'
+import {
+  memoFavorites,
+  memoLinks,
+  memoReviewEvents,
+  memoVersions,
+  memos,
+  memoTags,
+  tags,
+} from '#/db/schema'
 import { parseHashtags, tagPathToSegments } from '#/lib/hashtags'
-import { escapeLike } from '#/lib/search'
+import { parseMemoReferences } from '#/lib/memo-links'
 import { ulid } from '#/lib/ulid'
 import {
   EMPTY_COUNTS,
@@ -36,6 +45,7 @@ export interface MemoWithTags {
   pinned: boolean
   globalPinned: boolean
   archived: boolean
+  deletedAt: string | null
   createdAt: string
   updatedAt: string
   tags: Array<{ id: string; name: string; parentId: string | null }>
@@ -48,7 +58,12 @@ export interface ListMemosParams {
   limit?: number
   tag?: string
   q?: string
-  filter?: 'all' | 'archived'
+  filter?: 'all' | 'archived' | 'deleted'
+  visibility?: 'public' | 'private'
+  favorited?: boolean
+  from?: string
+  to?: string
+  tzOffsetMinutes?: number
 }
 
 // db.transaction 回调里的事务类型
@@ -67,6 +82,7 @@ export function toMemoWithTags(
     pinned: memo.pinned,
     globalPinned: memo.globalPinned,
     archived: memo.archived,
+    deletedAt: memo.deletedAt?.toISOString() ?? null,
     createdAt: memo.createdAt.toISOString(),
     updatedAt: memo.updatedAt.toISOString(),
     tags: tagRows.map((t) => ({
@@ -140,6 +156,61 @@ async function syncTagsForContent(
   }
 }
 
+async function syncLinksForContent(
+  tx: Tx,
+  userId: string,
+  memoId: string,
+  content: string,
+): Promise<void> {
+  await tx.delete(memoLinks).where(eq(memoLinks.sourceId, memoId))
+  const referencedIds = parseMemoReferences(content).filter(
+    (id) => id !== memoId,
+  )
+  if (referencedIds.length === 0) return
+
+  const targets = await tx
+    .select({ id: memos.id })
+    .from(memos)
+    .where(
+      and(
+        eq(memos.userId, userId),
+        isNull(memos.deletedAt),
+        inArray(memos.id, referencedIds),
+      ),
+    )
+  const now = new Date()
+  for (const target of targets) {
+    await tx
+      .insert(memoLinks)
+      .values({ sourceId: memoId, targetId: target.id, createdAt: now })
+      .onConflictDoNothing()
+  }
+}
+
+function contentSearchCondition(query: string): SQL {
+  const phrase = `"${query.trim().replace(/"/g, '""')}"`
+  return sql`${memos.id} IN (
+    SELECT id FROM memos_fts WHERE memos_fts MATCH ${phrase}
+  )`
+}
+
+function localDateBoundary(
+  value: string,
+  tzOffsetMinutes: number,
+  addDays = 0,
+): Date | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (!match) return null
+  const ms =
+    Date.UTC(
+      Number(match[1]),
+      Number(match[2]) - 1,
+      Number(match[3]) + addDays,
+    ) +
+    tzOffsetMinutes * 60_000
+  return new Date(ms)
+}
+
 /** 清理不再被任何 memo 引用、且没有子标签的标签（自底向上循环删除） */
 async function cleanupOrphanTags(tx: Tx, userId: string): Promise<void> {
   for (let i = 0; i < 10; i++) {
@@ -182,17 +253,38 @@ export async function loadMemoTags(memoIds: string[]): Promise<
 export async function createMemoForUser(
   userId: string,
   content: string,
-  opts: { visibility?: 'public' | 'private' } = {},
+  opts: { visibility?: 'public' | 'private'; clientId?: string } = {},
 ): Promise<MemoWithTags> {
+  if (opts.clientId) {
+    const existing = await db.query.memos.findFirst({
+      where: and(eq(memos.userId, userId), eq(memos.clientId, opts.clientId)),
+    })
+    if (existing) {
+      const [tagRows, countsMap, viewerMap] = await Promise.all([
+        loadMemoTags([existing.id]),
+        loadMemoCounts([existing.id]),
+        loadViewerStates([existing.id], userId),
+      ])
+      return toMemoWithTags(
+        existing,
+        tagRows,
+        countsMap.get(existing.id),
+        viewerMap.get(existing.id),
+      )
+    }
+  }
+
   const now = new Date()
   const memo = {
     id: ulid(),
     userId,
     content,
+    clientId: opts.clientId ?? null,
     visibility: opts.visibility ?? 'private',
     pinned: false,
     globalPinned: false,
     archived: false,
+    deletedAt: null,
     createdAt: now,
     updatedAt: now,
   }
@@ -200,6 +292,7 @@ export async function createMemoForUser(
   await db.transaction(async (tx) => {
     await tx.insert(memos).values(memo)
     await syncTagsForContent(tx, userId, memo.id, content)
+    await syncLinksForContent(tx, userId, memo.id, content)
     await cleanupOrphanTags(tx, userId)
   })
 
@@ -219,15 +312,37 @@ export async function listMemosForUser(
 ): Promise<{ items: MemoWithTags[]; nextCursor: string | null }> {
   const limit = params.limit ?? 20
   const conditions = [eq(memos.userId, userId)]
+  if (params.filter === 'deleted') {
+    conditions.push(isNotNull(memos.deletedAt))
+  } else {
+    conditions.push(isNull(memos.deletedAt))
+  }
   if (params.filter === 'archived') {
     conditions.push(eq(memos.archived, true))
-  } else {
+  } else if (params.filter !== 'deleted') {
     conditions.push(eq(memos.archived, false))
   }
   if (params.q) {
-    conditions.push(
-      like(memos.content, sql`${`%${escapeLike(params.q)}%`} ESCAPE '\\'`),
-    )
+    conditions.push(contentSearchCondition(params.q))
+  }
+  if (params.visibility) {
+    conditions.push(eq(memos.visibility, params.visibility))
+  }
+  if (params.favorited) {
+    const favoriteIds = db
+      .select({ memoId: memoFavorites.memoId })
+      .from(memoFavorites)
+      .where(eq(memoFavorites.userId, userId))
+    conditions.push(inArray(memos.id, favoriteIds))
+  }
+  const tzOffsetMinutes = params.tzOffsetMinutes ?? 0
+  if (params.from) {
+    const from = localDateBoundary(params.from, tzOffsetMinutes)
+    if (from) conditions.push(gte(memos.createdAt, from))
+  }
+  if (params.to) {
+    const to = localDateBoundary(params.to, tzOffsetMinutes, 1)
+    if (to) conditions.push(lt(memos.createdAt, to))
   }
   if (params.tag) {
     const tagIds = await resolveTagIds(userId, params.tag)
@@ -246,27 +361,32 @@ export async function listMemosForUser(
     if (cur) {
       const cDate = new Date(cur.c)
       const cursorConditions =
-        cur.p === 1
+        params.filter === 'deleted'
           ? [
-              // 置顶区内部
-              and(eq(memos.pinned, true), lt(memos.createdAt, cDate)),
-              and(
-                eq(memos.pinned, true),
-                eq(memos.createdAt, cDate),
-                lt(memos.id, cur.i),
-              ),
-              // 已读完全部置顶，进入普通区
-              and(eq(memos.pinned, false)),
+              lt(memos.deletedAt, cDate),
+              and(eq(memos.deletedAt, cDate), lt(memos.id, cur.i)),
             ]
-          : [
-              // 普通区内部
-              and(eq(memos.pinned, false), lt(memos.createdAt, cDate)),
-              and(
-                eq(memos.pinned, false),
-                eq(memos.createdAt, cDate),
-                lt(memos.id, cur.i),
-              ),
-            ]
+          : cur.p === 1
+            ? [
+                // 置顶区内部
+                and(eq(memos.pinned, true), lt(memos.createdAt, cDate)),
+                and(
+                  eq(memos.pinned, true),
+                  eq(memos.createdAt, cDate),
+                  lt(memos.id, cur.i),
+                ),
+                // 已读完全部置顶，进入普通区
+                and(eq(memos.pinned, false)),
+              ]
+            : [
+                // 普通区内部
+                and(eq(memos.pinned, false), lt(memos.createdAt, cDate)),
+                and(
+                  eq(memos.pinned, false),
+                  eq(memos.createdAt, cDate),
+                  lt(memos.id, cur.i),
+                ),
+              ]
       cursorCond = or(...cursorConditions)
       if (cursorCond) conditions.push(cursorCond)
     }
@@ -276,7 +396,11 @@ export async function listMemosForUser(
     .select()
     .from(memos)
     .where(and(...conditions))
-    .orderBy(desc(memos.pinned), desc(memos.createdAt), desc(memos.id))
+    .orderBy(
+      ...(params.filter === 'deleted'
+        ? [desc(memos.deletedAt), desc(memos.id)]
+        : [desc(memos.pinned), desc(memos.createdAt), desc(memos.id)]),
+    )
     .limit(limit + 1)
 
   const hasMore = rows.length > limit
@@ -296,8 +420,11 @@ export async function listMemosForUser(
   if (hasMore) {
     nextCursor = Buffer.from(
       JSON.stringify({
-        p: last.pinned ? 1 : 0,
-        c: last.createdAt.getTime(),
+        p: params.filter === 'deleted' ? 0 : last.pinned ? 1 : 0,
+        c:
+          params.filter === 'deleted'
+            ? last.deletedAt!.getTime()
+            : last.createdAt.getTime(),
         i: last.id,
       }),
     ).toString('base64url')
@@ -396,18 +523,47 @@ export async function updateMemoForUser(
   const now = new Date()
 
   await db.transaction(async (tx) => {
+    const current = await tx.query.memos.findFirst({
+      where: and(
+        eq(memos.id, id),
+        eq(memos.userId, userId),
+        isNull(memos.deletedAt),
+      ),
+    })
+    if (!current) throw new Error('memo not found')
+    if (current.content === content) {
+      return
+    }
+    await tx.insert(memoVersions).values({
+      id: ulid(),
+      userId,
+      memoId: id,
+      content: current.content,
+      createdAt: now,
+    })
     const updated = await tx
       .update(memos)
       .set({ content, updatedAt: now })
-      .where(and(eq(memos.id, id), eq(memos.userId, userId)))
+      .where(
+        and(
+          eq(memos.id, id),
+          eq(memos.userId, userId),
+          isNull(memos.deletedAt),
+        ),
+      )
       .returning()
     if (updated.length === 0) throw new Error('memo not found')
     await syncTagsForContent(tx, userId, id, content)
+    await syncLinksForContent(tx, userId, id, content)
     await cleanupOrphanTags(tx, userId)
   })
 
   const memo = await db.query.memos.findFirst({
-    where: and(eq(memos.id, id), eq(memos.userId, userId)),
+    where: and(
+      eq(memos.id, id),
+      eq(memos.userId, userId),
+      isNull(memos.deletedAt),
+    ),
   })
   if (!memo) throw new Error('memo not found')
   const [tagRows, countsMap, viewerMap] = await Promise.all([
@@ -429,7 +585,11 @@ export async function getMemoForUser(
   id: string,
 ): Promise<MemoWithTags> {
   const memo = await db.query.memos.findFirst({
-    where: and(eq(memos.id, id), eq(memos.userId, userId)),
+    where: and(
+      eq(memos.id, id),
+      eq(memos.userId, userId),
+      isNull(memos.deletedAt),
+    ),
   })
   if (!memo) throw new Error('memo not found')
   const [tagRows, countsMap, viewerMap] = await Promise.all([
@@ -445,6 +605,142 @@ export async function getMemoForUser(
   )
 }
 
+export interface MemoConnections {
+  outgoing: MemoWithTags[]
+  backlinks: MemoWithTags[]
+  related: MemoWithTags[]
+}
+
+export async function getMemoConnectionsForUser(
+  userId: string,
+  memoId: string,
+): Promise<MemoConnections> {
+  await getMemoForUser(userId, memoId)
+  const [outgoingRows, backlinkRows, tagRows] = await Promise.all([
+    db
+      .select({ id: memoLinks.targetId })
+      .from(memoLinks)
+      .where(eq(memoLinks.sourceId, memoId))
+      .limit(20),
+    db
+      .select({ id: memoLinks.sourceId })
+      .from(memoLinks)
+      .where(eq(memoLinks.targetId, memoId))
+      .limit(20),
+    db
+      .select({ tagId: memoTags.tagId })
+      .from(memoTags)
+      .where(eq(memoTags.memoId, memoId)),
+  ])
+
+  const relatedRows =
+    tagRows.length === 0
+      ? []
+      : await db
+          .select({ id: memos.id })
+          .from(memoTags)
+          .innerJoin(memos, eq(memos.id, memoTags.memoId))
+          .where(
+            and(
+              inArray(
+                memoTags.tagId,
+                tagRows.map((row) => row.tagId),
+              ),
+              eq(memos.userId, userId),
+              eq(memos.archived, false),
+              isNull(memos.deletedAt),
+              ne(memos.id, memoId),
+            ),
+          )
+          .groupBy(memos.id)
+          .orderBy(desc(count(memoTags.tagId)), desc(memos.createdAt))
+          .limit(8)
+
+  async function load(ids: string[]): Promise<MemoWithTags[]> {
+    return Promise.all(ids.map((id) => getMemoForUser(userId, id)))
+  }
+
+  const [outgoing, backlinks, related] = await Promise.all([
+    load(outgoingRows.map((row) => row.id)),
+    load(backlinkRows.map((row) => row.id)),
+    load(relatedRows.map((row) => row.id)),
+  ])
+  return { outgoing, backlinks, related }
+}
+
+export type ReviewMode = 'random' | 'on-this-day' | 'least-reviewed'
+
+export async function getReviewMemosForUser(
+  userId: string,
+  opts: {
+    mode: ReviewMode
+    n?: number
+    tag?: string
+    tzOffsetMinutes?: number
+  },
+): Promise<MemoWithTags[]> {
+  const limit = Math.min(opts.n ?? 8, 20)
+  const conditions = [
+    eq(memos.userId, userId),
+    eq(memos.archived, false),
+    isNull(memos.deletedAt),
+  ]
+  if (opts.tag) {
+    const tagIds = await resolveTagIds(userId, opts.tag)
+    if (tagIds.length === 0) return []
+    const taggedMemoIds = db
+      .select({ memoId: memoTags.memoId })
+      .from(memoTags)
+      .where(inArray(memoTags.tagId, tagIds))
+    conditions.push(inArray(memos.id, taggedMemoIds))
+  }
+  if (opts.mode === 'on-this-day') {
+    const offset = opts.tzOffsetMinutes ?? 0
+    const localNow = new Date(Date.now() - offset * 60_000)
+    const monthDay = `${String(localNow.getUTCMonth() + 1).padStart(2, '0')}-${String(localNow.getUTCDate()).padStart(2, '0')}`
+    const modifier = `${-offset} minutes`
+    conditions.push(
+      sql`strftime('%m-%d', ${memos.createdAt} / 1000, 'unixepoch', ${modifier}) = ${monthDay}`,
+    )
+  }
+
+  let query = db
+    .select()
+    .from(memos)
+    .where(and(...conditions))
+    .$dynamic()
+  query =
+    opts.mode === 'random'
+      ? query.orderBy(sql`random()`)
+      : opts.mode === 'least-reviewed'
+        ? query.orderBy(
+            sql`(SELECT count(*) FROM memo_review_events review WHERE review.memo_id = ${memos.id})`,
+            sql`(SELECT max(reviewed_at) FROM memo_review_events review WHERE review.memo_id = ${memos.id}) ASC`,
+            desc(memos.createdAt),
+          )
+        : query.orderBy(desc(memos.createdAt))
+
+  const rows = await query.limit(limit)
+  if (rows.length > 0) {
+    const now = new Date()
+    await db.insert(memoReviewEvents).values(
+      rows.map((memo) => ({
+        id: ulid(),
+        userId,
+        memoId: memo.id,
+        reviewedAt: now,
+      })),
+    )
+  }
+  const tagData = await loadMemoTags(rows.map((memo) => memo.id))
+  return rows.map((memo) =>
+    toMemoWithTags(
+      memo,
+      tagData.filter((tag) => tag.memoId === memo.id),
+    ),
+  )
+}
+
 // ── delete ───────────────────────────────────────────────
 export async function deleteMemoForUser(
   userId: string,
@@ -453,13 +749,107 @@ export async function deleteMemoForUser(
   let deleted = false
   await db.transaction(async (tx) => {
     const res = await tx
-      .delete(memos)
-      .where(and(eq(memos.id, id), eq(memos.userId, userId)))
+      .update(memos)
+      .set({
+        deletedAt: new Date(),
+        pinned: false,
+        globalPinned: false,
+        archived: false,
+        updatedAt: new Date(),
+      })
+      .where(
+        and(
+          eq(memos.id, id),
+          eq(memos.userId, userId),
+          isNull(memos.deletedAt),
+        ),
+      )
       .returning()
     deleted = res.length > 0
+  })
+  return { deleted }
+}
+
+export async function restoreDeletedMemoForUser(
+  userId: string,
+  id: string,
+): Promise<{ restored: boolean }> {
+  const restored = await db
+    .update(memos)
+    .set({ deletedAt: null, updatedAt: new Date() })
+    .where(
+      and(
+        eq(memos.id, id),
+        eq(memos.userId, userId),
+        isNotNull(memos.deletedAt),
+      ),
+    )
+    .returning({ id: memos.id })
+  return { restored: restored.length > 0 }
+}
+
+export async function purgeMemoForUser(
+  userId: string,
+  id: string,
+): Promise<{ deleted: boolean }> {
+  let deleted = false
+  await db.transaction(async (tx) => {
+    const rows = await tx
+      .delete(memos)
+      .where(
+        and(
+          eq(memos.id, id),
+          eq(memos.userId, userId),
+          isNotNull(memos.deletedAt),
+        ),
+      )
+      .returning({ id: memos.id })
+    deleted = rows.length > 0
     if (deleted) await cleanupOrphanTags(tx, userId)
   })
   return { deleted }
+}
+
+export interface MemoVersionItem {
+  id: string
+  content: string
+  createdAt: string
+}
+
+export async function listMemoVersionsForUser(
+  userId: string,
+  memoId: string,
+): Promise<MemoVersionItem[]> {
+  await getMemoForUser(userId, memoId)
+  const rows = await db
+    .select()
+    .from(memoVersions)
+    .where(
+      and(eq(memoVersions.userId, userId), eq(memoVersions.memoId, memoId)),
+    )
+    .orderBy(desc(memoVersions.createdAt))
+    .limit(50)
+  return rows.map((row) => ({
+    id: row.id,
+    content: row.content,
+    createdAt: row.createdAt.toISOString(),
+  }))
+}
+
+export async function restoreMemoVersionForUser(
+  userId: string,
+  memoId: string,
+  versionId: string,
+): Promise<MemoWithTags> {
+  const version = await db.query.memoVersions.findFirst({
+    where: and(
+      eq(memoVersions.id, versionId),
+      eq(memoVersions.memoId, memoId),
+      eq(memoVersions.userId, userId),
+    ),
+  })
+  if (!version) throw new Error('memo version not found')
+  return updateMemoForUser(userId, memoId, version.content)
 }
 
 // ── togglePin / toggleArchive ────────────────────────────
@@ -468,7 +858,11 @@ export async function togglePinForUser(
   id: string,
 ): Promise<{ pinned: boolean }> {
   const memo = await db.query.memos.findFirst({
-    where: and(eq(memos.id, id), eq(memos.userId, userId)),
+    where: and(
+      eq(memos.id, id),
+      eq(memos.userId, userId),
+      isNull(memos.deletedAt),
+    ),
     columns: { pinned: true },
   })
   if (!memo) throw new Error('memo not found')
@@ -480,7 +874,11 @@ export async function toggleArchiveForUser(
   id: string,
 ): Promise<{ archived: boolean }> {
   const memo = await db.query.memos.findFirst({
-    where: and(eq(memos.id, id), eq(memos.userId, userId)),
+    where: and(
+      eq(memos.id, id),
+      eq(memos.userId, userId),
+      isNull(memos.deletedAt),
+    ),
   })
   if (!memo) throw new Error('memo not found')
   const nextArchived = !memo.archived
@@ -491,7 +889,9 @@ export async function toggleArchiveForUser(
       ...(nextArchived ? { globalPinned: false } : {}),
       updatedAt: new Date(),
     })
-    .where(and(eq(memos.id, id), eq(memos.userId, userId)))
+    .where(
+      and(eq(memos.id, id), eq(memos.userId, userId), isNull(memos.deletedAt)),
+    )
     .returning()
   return { archived: updated.archived }
 }
@@ -502,7 +902,11 @@ export async function setVisibilityForUser(
   visibility: 'public' | 'private',
 ): Promise<{ visibility: 'public' | 'private' }> {
   const memo = await db.query.memos.findFirst({
-    where: and(eq(memos.id, id), eq(memos.userId, userId)),
+    where: and(
+      eq(memos.id, id),
+      eq(memos.userId, userId),
+      isNull(memos.deletedAt),
+    ),
   })
   if (!memo) throw new Error('memo not found')
   const [updated] = await db
@@ -512,7 +916,9 @@ export async function setVisibilityForUser(
       ...(visibility === 'private' ? { globalPinned: false } : {}),
       updatedAt: new Date(),
     })
-    .where(and(eq(memos.id, id), eq(memos.userId, userId)))
+    .where(
+      and(eq(memos.id, id), eq(memos.userId, userId), isNull(memos.deletedAt)),
+    )
     .returning()
   return { visibility: updated.visibility }
 }
@@ -524,7 +930,11 @@ export async function setPinForUser(
 ): Promise<{ pinned: boolean }> {
   return db.transaction(async (tx) => {
     const memo = await tx.query.memos.findFirst({
-      where: and(eq(memos.id, id), eq(memos.userId, userId)),
+      where: and(
+        eq(memos.id, id),
+        eq(memos.userId, userId),
+        isNull(memos.deletedAt),
+      ),
       columns: { id: true, pinned: true },
     })
     if (!memo) throw new Error('memo not found')
@@ -551,7 +961,7 @@ export async function toggleGlobalPinForAdmin(
 ): Promise<{ globalPinned: boolean }> {
   return db.transaction(async (tx) => {
     const memo = await tx.query.memos.findFirst({
-      where: eq(memos.id, id),
+      where: and(eq(memos.id, id), isNull(memos.deletedAt)),
       columns: {
         id: true,
         visibility: true,
@@ -594,7 +1004,9 @@ export async function setArchiveForUser(
       ...(archived ? { globalPinned: false } : {}),
       updatedAt: new Date(),
     })
-    .where(and(eq(memos.id, id), eq(memos.userId, userId)))
+    .where(
+      and(eq(memos.id, id), eq(memos.userId, userId), isNull(memos.deletedAt)),
+    )
     .returning()
   if (updated.length === 0) throw new Error('memo not found')
   return { archived: updated[0].archived }
@@ -629,7 +1041,7 @@ export async function exportMemosForUser(
   const rows = await db
     .select()
     .from(memos)
-    .where(eq(memos.userId, userId))
+    .where(and(eq(memos.userId, userId), isNull(memos.deletedAt)))
     .orderBy(asc(memos.createdAt))
   const tagRows = await loadMemoTags(rows.map((m) => m.id))
   const tagByMemo = new Map<string, string[]>()
@@ -696,6 +1108,7 @@ export async function importMemosForUser(
       })
       // 复用标签同步逻辑（基于 content 重新解析，忽略导出文件里的 tags 字段）
       await syncTagsForContent(tx, userId, id, item.content)
+      await syncLinksForContent(tx, userId, id, item.content)
       if (item.pinned) requestedPinId = id
       imported++
     }
@@ -723,11 +1136,22 @@ export async function getRandomMemosForUser(
   const rows = await db
     .select()
     .from(memos)
-    .where(and(eq(memos.userId, userId), eq(memos.archived, false)))
+    .where(
+      and(
+        eq(memos.userId, userId),
+        eq(memos.archived, false),
+        isNull(memos.deletedAt),
+      ),
+    )
     .orderBy(sql`random()`)
     .limit(n)
   const tagRows = await loadMemoTags(rows.map((m) => m.id))
-  return rows.map((m) => toMemoWithTags(m, tagRows))
+  return rows.map((m) =>
+    toMemoWithTags(
+      m,
+      tagRows.filter((tag) => tag.memoId === m.id),
+    ),
+  )
 }
 
 function localDayKey(ms: number, tzOffsetMinutes: number): string {
@@ -747,12 +1171,24 @@ export async function getStatsForUser(
   const [{ total }] = await db
     .select({ total: count() })
     .from(memos)
-    .where(and(eq(memos.userId, userId), eq(memos.archived, false)))
+    .where(
+      and(
+        eq(memos.userId, userId),
+        eq(memos.archived, false),
+        isNull(memos.deletedAt),
+      ),
+    )
   // 连续记录天数：从最近一条往前数，要求每天（本地时区）至少一条
   const days = await db
     .select({ createdAt: memos.createdAt })
     .from(memos)
-    .where(and(eq(memos.userId, userId), eq(memos.archived, false)))
+    .where(
+      and(
+        eq(memos.userId, userId),
+        eq(memos.archived, false),
+        isNull(memos.deletedAt),
+      ),
+    )
     .orderBy(desc(memos.createdAt))
     .limit(3650)
   const daySet = new Set(
@@ -816,7 +1252,7 @@ export async function getContributionForUser(
   const maxMonth = monthKeyLocal(Date.now(), tzOffsetMinutes)
 
   const oldest = await db.query.memos.findFirst({
-    where: eq(memos.userId, userId),
+    where: and(eq(memos.userId, userId), isNull(memos.deletedAt)),
     columns: { createdAt: true },
     orderBy: [asc(memos.createdAt)],
   })
@@ -840,6 +1276,7 @@ export async function getContributionForUser(
       and(
         eq(memos.userId, userId),
         eq(memos.archived, false),
+        isNull(memos.deletedAt),
         gte(memos.createdAt, new Date(start)),
         lt(memos.createdAt, new Date(end)),
       ),

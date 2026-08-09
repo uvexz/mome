@@ -10,6 +10,7 @@ import { TanStackDevtools } from '@tanstack/react-devtools'
 import { Button, Toasty } from '@cloudflare/kumo'
 
 import { getAppConfig } from '#/server/config'
+import { ServiceWorkerRegister } from '#/components/service-worker-register'
 
 import '@fontsource-variable/geist'
 import '@fontsource-variable/geist-mono'
@@ -35,6 +36,7 @@ export const Route = createRootRoute({
       ],
       links: [
         { rel: 'icon', type: 'image/png', href: siteIcon },
+        { rel: 'manifest', href: '/site.webmanifest' },
         { rel: 'stylesheet', href: appCss },
       ],
       scripts: [{ src: '/theme-init.js' }],
@@ -50,6 +52,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
+        <ServiceWorkerRegister />
         <Toasty>{children}</Toasty>
         <TanStackDevtools
           config={{

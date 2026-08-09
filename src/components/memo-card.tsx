@@ -22,8 +22,12 @@ interface MemoCardProps {
   onTogglePin?: (memo: MemoWithTags) => void
   onToggleGlobalPin?: (memo: MemoWithTags) => void
   onEdit?: (memo: MemoWithTags) => void
+  onReference?: (memo: MemoWithTags) => void
   onToggleArchive?: (memo: MemoWithTags) => void
   onDelete?: (memo: MemoWithTags) => void
+  deleted?: boolean
+  onRestore?: (memo: MemoWithTags) => void
+  onPurge?: (memo: MemoWithTags) => void
   onToggleVisibility?: (memo: MemoWithTags) => void
   onLike: (memo: MemoWithTags) => void
   onFavorite: (memo: MemoWithTags) => void
@@ -48,8 +52,12 @@ export const MemoCard = memoize(function MemoCard({
   onTogglePin,
   onToggleGlobalPin,
   onEdit,
+  onReference,
   onToggleArchive,
   onDelete,
+  deleted = false,
+  onRestore,
+  onPurge,
   onToggleVisibility,
   onLike,
   onFavorite,
@@ -69,6 +77,13 @@ export const MemoCard = memoize(function MemoCard({
   const username = author?.username ?? profileUsername ?? myUsername
 
   function openMemoPage() {
+    if (deleted) return
+    const ownMemo =
+      !author && (!profileUsername || profileUsername === myUsername)
+    if (ownMemo) {
+      void navigate({ to: '/memo/$memoId', params: { memoId: memo.id } })
+      return
+    }
     if (!username) return
     void navigate({
       to: '/@{$username}/$memoId',
@@ -180,16 +195,24 @@ export const MemoCard = memoize(function MemoCard({
       )}
 
       <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-kumo-line pt-2.5">
-        <MemoInteractions
-          memo={memo}
-          onLike={onLike}
-          onFavorite={onFavorite}
-          onComment={onComment}
-          onRepost={onRepost}
-        />
+        {deleted ? (
+          <span className="font-mono text-xs text-kumo-subtle">
+            {memo.deletedAt
+              ? `删除于 ${relativeTime(memo.deletedAt)}`
+              : '已删除'}
+          </span>
+        ) : (
+          <MemoInteractions
+            memo={memo}
+            onLike={onLike}
+            onFavorite={onFavorite}
+            onComment={onComment}
+            onRepost={onRepost}
+          />
+        )}
         <span className="flex shrink-0 items-center gap-2.5">
-          {visibilityIcon}
-          {username ? (
+          {!deleted && visibilityIcon}
+          {!deleted && username ? (
             <button
               type="button"
               onClick={openMemoPage}
@@ -200,17 +223,19 @@ export const MemoCard = memoize(function MemoCard({
                 {relativeTime(memo.createdAt)}
               </time>
             </button>
-          ) : (
+          ) : !deleted ? (
             <time
               dateTime={memo.createdAt}
               className="font-mono text-xs text-kumo-subtle"
             >
               {relativeTime(memo.createdAt)}
             </time>
-          )}
-          {(onTogglePin ||
+          ) : null}
+          {(deleted ||
+            onTogglePin ||
             onToggleGlobalPin ||
             onEdit ||
+            onReference ||
             onToggleArchive ||
             onDelete ||
             onToggleVisibility) && (
@@ -219,6 +244,7 @@ export const MemoCard = memoize(function MemoCard({
               globalPinned={memo.globalPinned}
               archived={memo.archived}
               visibility={memo.visibility}
+              deleted={deleted}
               onTogglePin={onTogglePin ? () => onTogglePin(memo) : undefined}
               onToggleGlobalPin={
                 onToggleGlobalPin ? () => onToggleGlobalPin(memo) : undefined
@@ -227,10 +253,13 @@ export const MemoCard = memoize(function MemoCard({
                 onToggleVisibility ? () => onToggleVisibility(memo) : undefined
               }
               onEdit={onEdit ? () => onEdit(memo) : undefined}
+              onReference={onReference ? () => onReference(memo) : undefined}
               onToggleArchive={
                 onToggleArchive ? () => onToggleArchive(memo) : undefined
               }
               onDelete={onDelete ? () => onDelete(memo) : undefined}
+              onRestore={onRestore ? () => onRestore(memo) : undefined}
+              onPurge={onPurge ? () => onPurge(memo) : undefined}
             />
           )}
         </span>

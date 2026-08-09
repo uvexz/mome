@@ -12,15 +12,19 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AtChar123usernameChar125RouteImport } from './routes/@{$username}'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as CaptureRouteImport } from './routes/capture'
 import { Route as ExploreRouteImport } from './routes/explore'
 import { Route as InteractionsRouteImport } from './routes/interactions'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as NotificationsRouteImport } from './routes/notifications'
 import { Route as ReviewRouteImport } from './routes/review'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AtChar123usernameChar125IndexRouteImport } from './routes/@{$username}.index'
 import { Route as AtChar123usernameChar125MemoIdRouteImport } from './routes/@{$username}.$memoId'
 import { Route as ApiDevOtpRouteImport } from './routes/api/dev-otp'
+import { Route as MemoMemoIdRouteImport } from './routes/memo.$memoId'
+import { Route as V1ClipsRouteImport } from './routes/v1/clips'
 import { Route as V1MeRouteImport } from './routes/v1/me'
 import { Route as V1MemosRouteImport } from './routes/v1/memos'
 import { Route as V1StatsRouteImport } from './routes/v1/stats'
@@ -44,6 +48,11 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
+const CaptureRoute = CaptureRouteImport.update({
+  id: '/capture',
+  path: '/capture',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ExploreRoute = ExploreRouteImport.update({
   id: '/explore',
   path: '/explore',
@@ -57,6 +66,11 @@ const InteractionsRoute = InteractionsRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const NotificationsRoute = NotificationsRouteImport.update({
+  id: '/notifications',
+  path: '/notifications',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ReviewRoute = ReviewRouteImport.update({
@@ -89,6 +103,16 @@ const AtChar123usernameChar125MemoIdRoute =
 const ApiDevOtpRoute = ApiDevOtpRouteImport.update({
   id: '/api/dev-otp',
   path: '/api/dev-otp',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const MemoMemoIdRoute = MemoMemoIdRouteImport.update({
+  id: '/memo/$memoId',
+  path: '/memo/$memoId',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const V1ClipsRoute = V1ClipsRouteImport.update({
+  id: '/v1/clips',
+  path: '/v1/clips',
   getParentRoute: () => rootRouteImport,
 } as any)
 const V1MeRoute = V1MeRouteImport.update({
@@ -126,14 +150,18 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/@{$username}': typeof AtChar123usernameChar125RouteWithChildren
   '/admin': typeof AdminRoute
+  '/capture': typeof CaptureRoute
   '/explore': typeof ExploreRoute
   '/interactions': typeof InteractionsRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/review': typeof ReviewRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
+  '/memo/$memoId': typeof MemoMemoIdRoute
+  '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
   '/v1/memos': typeof V1MemosRouteWithChildren
   '/v1/stats': typeof V1StatsRoute
@@ -145,14 +173,18 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/admin': typeof AdminRoute
+  '/capture': typeof CaptureRoute
   '/explore': typeof ExploreRoute
   '/interactions': typeof InteractionsRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/review': typeof ReviewRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
+  '/memo/$memoId': typeof MemoMemoIdRoute
+  '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
   '/v1/memos': typeof V1MemosRouteWithChildren
   '/v1/stats': typeof V1StatsRoute
@@ -166,14 +198,18 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/@{$username}': typeof AtChar123usernameChar125RouteWithChildren
   '/admin': typeof AdminRoute
+  '/capture': typeof CaptureRoute
   '/explore': typeof ExploreRoute
   '/interactions': typeof InteractionsRoute
   '/login': typeof LoginRoute
+  '/notifications': typeof NotificationsRoute
   '/review': typeof ReviewRoute
   '/settings': typeof SettingsRoute
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
+  '/memo/$memoId': typeof MemoMemoIdRoute
+  '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
   '/v1/memos': typeof V1MemosRouteWithChildren
   '/v1/stats': typeof V1StatsRoute
@@ -188,14 +224,18 @@ export interface FileRouteTypes {
     | '/'
     | '/@{$username}'
     | '/admin'
+    | '/capture'
     | '/explore'
     | '/interactions'
     | '/login'
+    | '/notifications'
     | '/review'
     | '/settings'
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
+    | '/memo/$memoId'
+    | '/v1/clips'
     | '/v1/me'
     | '/v1/memos'
     | '/v1/stats'
@@ -207,14 +247,18 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/admin'
+    | '/capture'
     | '/explore'
     | '/interactions'
     | '/login'
+    | '/notifications'
     | '/review'
     | '/settings'
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
+    | '/memo/$memoId'
+    | '/v1/clips'
     | '/v1/me'
     | '/v1/memos'
     | '/v1/stats'
@@ -227,14 +271,18 @@ export interface FileRouteTypes {
     | '/'
     | '/@{$username}'
     | '/admin'
+    | '/capture'
     | '/explore'
     | '/interactions'
     | '/login'
+    | '/notifications'
     | '/review'
     | '/settings'
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
+    | '/memo/$memoId'
+    | '/v1/clips'
     | '/v1/me'
     | '/v1/memos'
     | '/v1/stats'
@@ -248,13 +296,17 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AtChar123usernameChar125Route: typeof AtChar123usernameChar125RouteWithChildren
   AdminRoute: typeof AdminRoute
+  CaptureRoute: typeof CaptureRoute
   ExploreRoute: typeof ExploreRoute
   InteractionsRoute: typeof InteractionsRoute
   LoginRoute: typeof LoginRoute
+  NotificationsRoute: typeof NotificationsRoute
   ReviewRoute: typeof ReviewRoute
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
   ApiDevOtpRoute: typeof ApiDevOtpRoute
+  MemoMemoIdRoute: typeof MemoMemoIdRoute
+  V1ClipsRoute: typeof V1ClipsRoute
   V1MeRoute: typeof V1MeRoute
   V1MemosRoute: typeof V1MemosRouteWithChildren
   V1StatsRoute: typeof V1StatsRoute
@@ -285,6 +337,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/capture': {
+      id: '/capture'
+      path: '/capture'
+      fullPath: '/capture'
+      preLoaderRoute: typeof CaptureRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/explore': {
       id: '/explore'
       path: '/explore'
@@ -304,6 +363,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/notifications': {
+      id: '/notifications'
+      path: '/notifications'
+      fullPath: '/notifications'
+      preLoaderRoute: typeof NotificationsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/review': {
@@ -346,6 +412,20 @@ declare module '@tanstack/react-router' {
       path: '/api/dev-otp'
       fullPath: '/api/dev-otp'
       preLoaderRoute: typeof ApiDevOtpRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/memo/$memoId': {
+      id: '/memo/$memoId'
+      path: '/memo/$memoId'
+      fullPath: '/memo/$memoId'
+      preLoaderRoute: typeof MemoMemoIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/v1/clips': {
+      id: '/v1/clips'
+      path: '/v1/clips'
+      fullPath: '/v1/clips'
+      preLoaderRoute: typeof V1ClipsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/v1/me': {
@@ -424,13 +504,17 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AtChar123usernameChar125Route: AtChar123usernameChar125RouteWithChildren,
   AdminRoute: AdminRoute,
+  CaptureRoute: CaptureRoute,
   ExploreRoute: ExploreRoute,
   InteractionsRoute: InteractionsRoute,
   LoginRoute: LoginRoute,
+  NotificationsRoute: NotificationsRoute,
   ReviewRoute: ReviewRoute,
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
   ApiDevOtpRoute: ApiDevOtpRoute,
+  MemoMemoIdRoute: MemoMemoIdRoute,
+  V1ClipsRoute: V1ClipsRoute,
   V1MeRoute: V1MeRoute,
   V1MemosRoute: V1MemosRouteWithChildren,
   V1StatsRoute: V1StatsRoute,

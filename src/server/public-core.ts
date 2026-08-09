@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, lt, or } from 'drizzle-orm'
+import { and, count, desc, eq, inArray, isNull, lt, or } from 'drizzle-orm'
 
 import { db } from '#/db'
 import { memoReposts, memos, memoTags, user } from '#/db/schema'
@@ -61,6 +61,7 @@ export async function getPublicProfileByUsername(
         eq(memos.userId, u.id),
         eq(memos.visibility, 'public'),
         eq(memos.archived, false),
+        isNull(memos.deletedAt),
       ),
     )
   const repostRows = await db
@@ -72,6 +73,7 @@ export async function getPublicProfileByUsername(
         eq(memoReposts.userId, u.id),
         eq(memos.visibility, 'public'),
         eq(memos.archived, false),
+        isNull(memos.deletedAt),
       ),
     )
   return {
@@ -101,12 +103,14 @@ export async function listPublicFeed(
     eq(memos.userId, u.id),
     eq(memos.visibility, 'public'),
     eq(memos.archived, false),
+    isNull(memos.deletedAt),
     eq(memos.pinned, false),
   ]
   const repostConditions = [
     eq(memoReposts.userId, u.id),
     eq(memos.visibility, 'public'),
     eq(memos.archived, false),
+    isNull(memos.deletedAt),
   ]
   if (cur?.p === 0) {
     if (cur.k !== 'repost') {
@@ -138,6 +142,7 @@ export async function listPublicFeed(
             eq(memos.userId, u.id),
             eq(memos.visibility, 'public'),
             eq(memos.archived, false),
+            isNull(memos.deletedAt),
             eq(memos.pinned, true),
           ),
         )
@@ -311,7 +316,7 @@ export async function getPublicMemoDetail(
   const memo = await db.query.memos.findFirst({
     where: eq(memos.id, memoId),
   })
-  if (!memo || memo.userId !== u.id) return null
+  if (!memo || memo.userId !== u.id || memo.deletedAt) return null
   // 非公开/已归档 memo：只有作者本人可见
   const isAuthor = viewerId !== null && viewerId === u.id
   if ((memo.visibility !== 'public' || memo.archived) && !isAuthor) {
@@ -343,7 +348,11 @@ export async function listAllPublicMemos(
   } = {},
 ): Promise<{ items: PublicTimelineItem[]; nextCursor: string | null }> {
   const limit = Math.min(opts.limit ?? 20, 50)
-  const conditions = [eq(memos.visibility, 'public'), eq(memos.archived, false)]
+  const conditions = [
+    eq(memos.visibility, 'public'),
+    eq(memos.archived, false),
+    isNull(memos.deletedAt),
+  ]
   if (opts.tag) {
     const tagIds = await resolveGlobalTagIds(opts.tag)
     if (tagIds.length === 0) {

@@ -1,17 +1,25 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Button, InputGroup } from '@cloudflare/kumo'
-import { GlobeSimple, MagnifyingGlass, Sparkle, X } from '@phosphor-icons/react'
+import {
+  Funnel,
+  GlobeSimple,
+  MagnifyingGlass,
+  Sparkle,
+  X,
+} from '@phosphor-icons/react'
 
 import { getAppConfig } from '#/server/config'
 
 import type { HomeSearch } from '#/lib/search'
 import { ThemeToggle } from './theme-toggle'
 import { UserMenu } from './user-menu'
+import { SearchFiltersDialog } from './search-filters-dialog'
 
 interface SiteHeaderProps {
   search: HomeSearch
   onSearchChange: (q: string | undefined) => void
+  onFilterChange: (patch: Partial<HomeSearch>) => void
 }
 
 const SEARCH_DEBOUNCE_MS = 300
@@ -20,10 +28,15 @@ const SEARCH_DEBOUNCE_MS = 300
  * 顶栏：logo / 搜索入口 / 主题切换 / 用户菜单。
  * sticky + border-b 与内容分隔。
  */
-export function SiteHeader({ search, onSearchChange }: SiteHeaderProps) {
+export function SiteHeader({
+  search,
+  onSearchChange,
+  onFilterChange,
+}: SiteHeaderProps) {
   const navigate = useNavigate()
   const [q, setQ] = useState(search.q ?? '')
   const [site, setSite] = useState({ name: 'mome', icon: '/favicon.png' })
+  const [filtersOpen, setFiltersOpen] = useState(false)
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 外部导航（如点标签）改变 q 时同步输入框
@@ -94,6 +107,27 @@ export function SiteHeader({ search, onSearchChange }: SiteHeaderProps) {
           </InputGroup>
         </div>
 
+        <Button
+          variant="ghost"
+          shape="square"
+          icon={
+            <Funnel
+              size={16}
+              weight={
+                search.visibility ||
+                search.favorited ||
+                search.from ||
+                search.to
+                  ? 'fill'
+                  : 'regular'
+              }
+            />
+          }
+          aria-label="筛选"
+          title="筛选"
+          onClick={() => setFiltersOpen(true)}
+        />
+
         <ThemeToggle />
 
         <Button
@@ -116,6 +150,12 @@ export function SiteHeader({ search, onSearchChange }: SiteHeaderProps) {
 
         <UserMenu />
       </div>
+      <SearchFiltersDialog
+        open={filtersOpen}
+        onOpenChange={setFiltersOpen}
+        value={search}
+        onApply={onFilterChange}
+      />
     </header>
   )
 }

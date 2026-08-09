@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>保存到 mome</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>保存到 mome</h1>
+        <button id="settings" class="text-button" type="button">设置</button>
+      </header>
+      <form id="clip-form">
+        <label>
+          标题
+          <input id="title" maxlength="500" autocomplete="off" />
+        </label>
+        <label>
+          摘要或选中文本
+          <textarea id="content" maxlength="4000" rows="7"></textarea>
+        </label>
+        <label>
+          标签
+          <input
+            id="tags"
+            maxlength="500"
+            placeholder="阅读, 稍后处理"
+            autocomplete="off"
+          />
+        </label>
+        <label>
+          可见性
+          <select id="visibility">
+            <option value="private">仅自己可见</option>
+            <option value="public">公开</option>
+          </select>
+        </label>
+        <p id="source" class="source"></p>
+        <p id="status" class="status" role="status"></p>
+        <button id="submit" class="primary" type="submit">保存</button>
+      </form>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

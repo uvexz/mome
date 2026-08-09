@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gt, inArray, or } from 'drizzle-orm'
+import { and, asc, count, eq, gt, inArray, isNull, or } from 'drizzle-orm'
 
 import { db } from '#/db'
 import {
@@ -11,6 +11,10 @@ import {
 } from '#/db/schema'
 import { resolveAvatarUrl } from '#/lib/avatar'
 import { ulid } from '#/lib/ulid'
+import {
+  createNotificationForMemo,
+  removeNotificationForMemo,
+} from './notifications-core'
 
 export interface MemoCounts {
   likes: number
@@ -151,7 +155,7 @@ async function assertInteractionAllowed(
   memoId: string,
 ): Promise<void> {
   const memo = await db.query.memos.findFirst({
-    where: eq(memos.id, memoId),
+    where: and(eq(memos.id, memoId), isNull(memos.deletedAt)),
     columns: { id: true, userId: true, visibility: true },
   })
   if (!memo) throw new Error('memo not found')
@@ -172,8 +176,10 @@ export async function toggleLikeForUser(
     await db
       .delete(memoLikes)
       .where(and(eq(memoLikes.memoId, memoId), eq(memoLikes.userId, userId)))
+    await removeNotificationForMemo(userId, memoId, 'like')
   } else {
     await db.insert(memoLikes).values({ memoId, userId, createdAt: new Date() })
+    await createNotificationForMemo(userId, memoId, 'like')
   }
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
   return { liked: !existing, counts }
@@ -220,6 +226,7 @@ export async function toggleRepostForUser(
       .where(
         and(eq(memoReposts.memoId, memoId), eq(memoReposts.userId, userId)),
       )
+    await removeNotificationForMemo(userId, memoId, 'repost')
   } else {
     await db.insert(memoReposts).values({
       memoId,
@@ -227,6 +234,7 @@ export async function toggleRepostForUser(
       content: content?.trim() || null,
       createdAt: new Date(),
     })
+    await createNotificationForMemo(userId, memoId, 'repost')
   }
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
   return { reposted: !existing, counts }
@@ -266,6 +274,7 @@ export async function addCommentForUser(
     createdAt: now,
     updatedAt: now,
   })
+  await createNotificationForMemo(userId, memoId, 'comment', id)
   const row = await db
     .select({
       id: memoComments.id,
@@ -306,6 +315,7 @@ export async function deleteCommentForUser(
     return { deleted: false, counts: EMPTY_COUNTS }
   }
   await db.delete(memoComments).where(eq(memoComments.id, commentId))
+  await removeNotificationForMemo(userId, comment.memoId, 'comment', commentId)
   const counts =
     (await loadMemoCounts([comment.memoId])).get(comment.memoId) ?? EMPTY_COUNTS
   return { deleted: true, counts }
@@ -374,7 +384,7 @@ export async function assertMemoVisibleToUser(
   viewerId: string | null,
 ): Promise<boolean> {
   const memo = await db.query.memos.findFirst({
-    where: eq(memos.id, memoId),
+    where: and(eq(memos.id, memoId), isNull(memos.deletedAt)),
     columns: { userId: true, visibility: true },
   })
   if (!memo) return false

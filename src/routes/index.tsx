@@ -5,7 +5,7 @@ import {
   useSearch,
 } from '@tanstack/react-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader, useKumoToastManager } from '@cloudflare/kumo'
+import { Loader, Tabs, useKumoToastManager } from '@cloudflare/kumo'
 
 import { Composer } from '#/components/composer'
 import { ContributionGraph } from '#/components/contribution-graph'
@@ -18,13 +18,14 @@ import { RepostDialog } from '#/components/repost-dialog'
 import { SiteHeader } from '#/components/site-header'
 import { TagList } from '#/components/tag-list'
 import { homeSearchSchema } from '#/lib/search'
-import { cn } from '#/lib/utils'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import {
   deleteMemo,
   getContributionGraph,
   getStats,
   listHomeFeed,
+  purgeMemo,
+  restoreDeletedMemo,
   setVisibility,
   toggleArchive,
   togglePin,
@@ -82,7 +83,14 @@ function Home() {
   const reqIdRef = useRef(0)
   const monthRef = useRef<string | null>(null)
 
-  const hasFilters = Boolean(search.tag || search.q)
+  const hasFilters = Boolean(
+    search.tag ||
+    search.q ||
+    search.visibility ||
+    search.favorited ||
+    search.from ||
+    search.to,
+  )
 
   // ── 加载 ────────────────────────────────────────────────
   const loadInitial = useCallback(async () => {
@@ -98,6 +106,11 @@ function Home() {
             tag: s.tag,
             q: s.q,
             filter: s.filter,
+            visibility: s.visibility,
+            favorited: s.favorited,
+            from: s.from,
+            to: s.to,
+            tzOffsetMinutes: new Date().getTimezoneOffset(),
           },
         }),
         listTags(),
@@ -142,6 +155,11 @@ function Home() {
           tag: s.tag,
           q: s.q,
           filter: s.filter,
+          visibility: s.visibility,
+          favorited: s.favorited,
+          from: s.from,
+          to: s.to,
+          tzOffsetMinutes: new Date().getTimezoneOffset(),
         },
       })
       if (id !== reqIdRef.current) return
@@ -160,7 +178,15 @@ function Home() {
   useEffect(() => {
     void loadInitial()
     // loadInitial 稳定；search 变化时靠下方依赖触发重载
-  }, [search.tag, search.q, search.filter])
+  }, [
+    search.tag,
+    search.q,
+    search.filter,
+    search.visibility,
+    search.favorited,
+    search.from,
+    search.to,
+  ])
 
   const refreshTags = useCallback(async () => {
     try {
@@ -210,7 +236,7 @@ function Home() {
     void refreshTags()
     void refreshContribution()
     const s = searchRef.current
-    if (s.tag || s.q || s.filter === 'archived') {
+    if (s.tag || s.q || s.filter) {
       // 当前视图有筛选/归档时，乐观插入可能不符合视图条件，改为按当前条件重载
       void loadInitial()
     } else {
@@ -292,13 +318,21 @@ function Home() {
   async function handleDelete() {
     if (!deleting) return
     try {
-      await deleteMemo({ data: { id: deleting.id } })
+      const permanent = Boolean(deleting.deletedAt)
+      if (permanent) {
+        await purgeMemo({ data: { id: deleting.id } })
+      } else {
+        await deleteMemo({ data: { id: deleting.id } })
+      }
       setItems((prev) => prev.filter((i) => i.memo.id !== deleting.id))
       void refreshTags()
       void refreshContribution()
       setDeleteOpen(false)
       setDeleting(null)
-      toastRef.current.add({ title: '已删除', variant: 'success' })
+      toastRef.current.add({
+        title: permanent ? '已永久删除' : '已移至回收站',
+        variant: 'success',
+      })
     } catch (err) {
       toastRef.current.add({
         title: '删除失败',
@@ -308,6 +342,24 @@ function Home() {
       setDeleteOpen(false)
       setDeleting(null)
       void loadInitial() // 失败时重新同步列表
+    }
+  }
+
+  async function handleRestore(memo: MemoWithTags) {
+    try {
+      const result = await restoreDeletedMemo({ data: { id: memo.id } })
+      if (!result.restored) throw new Error('memo 已恢复或不存在')
+      setItems((prev) => prev.filter((item) => item.memo.id !== memo.id))
+      void refreshTags()
+      void refreshContribution()
+      toastRef.current.add({ title: '已恢复', variant: 'success' })
+    } catch (err) {
+      toastRef.current.add({
+        title: '恢复失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'error',
+      })
+      void loadInitial()
     }
   }
 
@@ -417,7 +469,15 @@ function Home() {
       search: (prev) => {
         const next = { ...prev, ...patch }
         // 空值从 URL 中移除
-        for (const key of ['tag', 'q', 'filter'] as const) {
+        for (const key of [
+          'tag',
+          'q',
+          'filter',
+          'visibility',
+          'favorited',
+          'from',
+          'to',
+        ] as const) {
           if (next[key] === undefined || next[key] === '') delete next[key]
         }
         return next
@@ -427,64 +487,82 @@ function Home() {
   }
 
   const archivedView = search.filter === 'archived'
+  const deletedView = search.filter === 'deleted'
+  const activeView = deletedView ? 'deleted' : archivedView ? 'archived' : 'all'
 
   return (
     <div className="min-h-dvh">
-      <SiteHeader search={search} onSearchChange={(q) => updateSearch({ q })} />
+      <SiteHeader
+        search={search}
+        onSearchChange={(q) => updateSearch({ q })}
+        onFilterChange={updateSearch}
+      />
 
       <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-8">
         <div className="grid gap-6">
-          <Composer
-            onCreated={handleCreated}
-            onError={(msg) =>
-              toastRef.current.add({ title: msg, variant: 'error' })
+          <Tabs
+            value={activeView}
+            variant="segmented"
+            tabs={[
+              {
+                value: 'all',
+                label: '我的',
+                className: 'flex-1 justify-center text-sm',
+              },
+              {
+                value: 'archived',
+                label: '归档',
+                className: 'flex-1 justify-center text-sm',
+              },
+              {
+                value: 'deleted',
+                label: '回收站',
+                className: 'flex-1 justify-center text-sm',
+              },
+            ]}
+            onValueChange={(value) =>
+              updateSearch({
+                filter:
+                  value === 'archived' || value === 'deleted'
+                    ? value
+                    : undefined,
+              })
             }
           />
 
-          {/* 小窗口：贡献图 + 标签列表（发布框下方） */}
-          <div className="grid gap-6 xl:hidden">
-            <ContributionGraph
-              data={contribution}
-              loading={contributionLoading}
-              collapsible
-              onMonthChange={(m) => void changeContributionMonth(m)}
+          {!deletedView && (
+            <Composer
+              onCreated={handleCreated}
+              onQueued={() =>
+                toastRef.current.add({
+                  title: '已离线保存，联网后自动发送',
+                  variant: 'success',
+                })
+              }
+              onError={(msg) =>
+                toastRef.current.add({ title: msg, variant: 'error' })
+              }
             />
-            {!archivedView && (
-              <TagList
-                tags={tags}
-                currentTag={search.tag}
-                onSelect={(tag) => updateSearch({ tag: tag ?? undefined })}
-              />
-            )}
-          </div>
+          )}
 
-          {/* 视图切换：全部 / 归档 */}
-          <div className="flex items-center gap-1 rounded-lg bg-kumo-tint p-0.5 text-sm">
-            {(
-              [
-                { key: undefined, label: '我的' },
-                { key: 'archived', label: '归档' },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.label}
-                type="button"
-                onClick={() =>
-                  updateSearch({
-                    filter: tab.key === 'archived' ? 'archived' : undefined,
-                  })
-                }
-                className={cn(
-                  'flex-1 rounded-md px-3 py-1.5 font-medium',
-                  archivedView === (tab.key === 'archived')
-                    ? 'bg-kumo-base text-kumo-strong ring ring-kumo-line'
-                    : 'text-kumo-subtle hover:text-kumo-default',
-                )}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          {/* 小窗口：贡献图 + 标签列表（发布框下方） */}
+          {!deletedView && (
+            <div className="grid gap-6 xl:hidden">
+              <ContributionGraph
+                data={contribution}
+                loading={contributionLoading}
+                collapsible
+                onMonthChange={(m) => void changeContributionMonth(m)}
+              />
+              {!archivedView && (
+                <TagList
+                  tags={tags}
+                  currentTag={search.tag}
+                  onSelect={(tag) => updateSearch({ tag: tag ?? undefined })}
+                />
+              )}
+            </div>
+          )}
 
           {loading && items.length === 0 ? (
             <div className="flex justify-center py-16">
@@ -492,18 +570,30 @@ function Home() {
             </div>
           ) : items.length === 0 ? (
             <EmptyState
-              hasFilters={hasFilters || archivedView}
+              hasFilters={hasFilters}
+              view={
+                deletedView ? 'deleted' : archivedView ? 'archived' : 'default'
+              }
               onClear={() =>
                 updateSearch({
                   tag: undefined,
                   q: undefined,
-                  filter: undefined,
+                  filter: deletedView
+                    ? 'deleted'
+                    : archivedView
+                      ? 'archived'
+                      : undefined,
+                  visibility: undefined,
+                  favorited: undefined,
+                  from: undefined,
+                  to: undefined,
                 })
               }
             />
           ) : (
             <MemoFeed
               items={items}
+              deleted={deletedView}
               hasMore={hasMore}
               loading={loading}
               onLoadMore={loadMore}
@@ -512,8 +602,19 @@ function Home() {
                 setEditing(m)
                 setEditOpen(true)
               }}
+              onReference={(memo) =>
+                void navigate({
+                  to: '/capture',
+                  search: { reference: memo.id },
+                })
+              }
               onToggleArchive={(m) => void handleToggleArchive(m)}
               onDelete={(m) => {
+                setDeleting(m)
+                setDeleteOpen(true)
+              }}
+              onRestore={(m) => void handleRestore(m)}
+              onPurge={(m) => {
                 setDeleting(m)
                 setDeleteOpen(true)
               }}
@@ -537,7 +638,7 @@ function Home() {
             </p>
           )}
 
-          {stats && (
+          {stats && !deletedView && (
             <footer className="mt-4 flex items-center justify-center gap-6 border-t border-kumo-line pt-6 text-xs text-kumo-subtle">
               <span>
                 共{' '}
@@ -559,24 +660,26 @@ function Home() {
       </main>
 
       {/* 大窗口：贡献图 + 标签列表，全局右侧低调显示 */}
-      <aside className="fixed right-6 top-24 z-30 hidden max-h-[calc(100dvh-7rem)] w-64 overflow-y-auto xl:block">
-        <div className="grid gap-6">
-          <ContributionGraph
-            data={contribution}
-            loading={contributionLoading}
-            onMonthChange={(m) => void changeContributionMonth(m)}
-          />
-          {!archivedView && (
-            <div className="px-3 pb-3">
-              <TagList
-                tags={tags}
-                currentTag={search.tag}
-                onSelect={(tag) => updateSearch({ tag: tag ?? undefined })}
-              />
-            </div>
-          )}
-        </div>
-      </aside>
+      {!deletedView && (
+        <aside className="fixed right-6 top-24 z-30 hidden max-h-[calc(100dvh-7rem)] w-64 overflow-y-auto xl:block">
+          <div className="grid gap-6">
+            <ContributionGraph
+              data={contribution}
+              loading={contributionLoading}
+              onMonthChange={(m) => void changeContributionMonth(m)}
+            />
+            {!archivedView && (
+              <div className="px-3 pb-3">
+                <TagList
+                  tags={tags}
+                  currentTag={search.tag}
+                  onSelect={(tag) => updateSearch({ tag: tag ?? undefined })}
+                />
+              </div>
+            )}
+          </div>
+        </aside>
+      )}
 
       <EditMemoDialog
         open={editOpen}
@@ -590,6 +693,7 @@ function Home() {
         open={deleteOpen}
         onOpenChange={setDeleteOpen}
         memo={deleting}
+        permanent={Boolean(deleting?.deletedAt)}
         onConfirm={handleDelete}
       />
       <MemoCommentsDialog
@@ -615,5 +719,9 @@ function Home() {
 type HomeSearchLike = {
   tag?: string
   q?: string
-  filter?: 'all' | 'archived'
+  filter?: 'all' | 'archived' | 'deleted'
+  visibility?: 'public' | 'private'
+  favorited?: boolean
+  from?: string
+  to?: string
 }

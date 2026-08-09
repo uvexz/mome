@@ -1,5 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
-import { count, desc, eq } from 'drizzle-orm'
+import { count, desc, eq, isNull } from 'drizzle-orm'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
@@ -151,6 +151,7 @@ export const getAdminOverview = createServerFn({ method: 'GET' })
       db
         .select({ userId: memos.userId, total: count() })
         .from(memos)
+        .where(isNull(memos.deletedAt))
         .groupBy(memos.userId),
     ])
     const adminIds = new Set(adminRows.map((row) => row.userId))

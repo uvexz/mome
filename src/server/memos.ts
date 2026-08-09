@@ -9,10 +9,17 @@ import {
   deleteMemoForUser,
   exportMemosForUser,
   getRandomMemosForUser,
+  getMemoConnectionsForUser,
+  getMemoForUser,
+  getReviewMemosForUser,
   getStatsForUser,
   importMemosForUser,
+  listMemoVersionsForUser,
   listMemosForUser,
   MAX_CONTENT,
+  purgeMemoForUser,
+  restoreDeletedMemoForUser,
+  restoreMemoVersionForUser,
   setVisibilityForUser,
   toggleArchiveForUser,
   togglePinForUser,
@@ -27,6 +34,7 @@ import { listHomeFeedForUser } from './timeline-core'
 
 export type { MemoWithTags }
 export type { ContributionDay, ContributionMonthData }
+export type { MemoConnections, MemoVersionItem, ReviewMode } from './memos-core'
 
 export const createMemo = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
@@ -34,11 +42,13 @@ export const createMemo = createServerFn({ method: 'POST' })
     z.object({
       content: z.string().trim().min(1).max(MAX_CONTENT),
       visibility: z.enum(['public', 'private']).default('private'),
+      clientId: z.string().uuid().optional(),
     }),
   )
   .handler(async ({ data, context }) =>
     createMemoForUser(context.user.id, data.content, {
       visibility: data.visibility,
+      clientId: data.clientId,
     }),
   )
 
@@ -50,7 +60,18 @@ export const listMemos = createServerFn({ method: 'GET' })
       limit: z.number().int().min(1).max(50).default(20),
       tag: z.string().optional(),
       q: z.string().max(200).optional(),
-      filter: z.enum(['all', 'archived']).optional(),
+      filter: z.enum(['all', 'archived', 'deleted']).optional(),
+      visibility: z.enum(['public', 'private']).optional(),
+      favorited: z.boolean().optional(),
+      from: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      to: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      tzOffsetMinutes: z.number().int().min(-840).max(840).optional(),
     }),
   )
   .handler(async ({ data, context }) =>
@@ -60,6 +81,11 @@ export const listMemos = createServerFn({ method: 'GET' })
       tag: data.tag,
       q: data.q,
       filter: data.filter,
+      visibility: data.visibility,
+      favorited: data.favorited,
+      from: data.from,
+      to: data.to,
+      tzOffsetMinutes: data.tzOffsetMinutes,
     }),
   )
 
@@ -72,7 +98,18 @@ export const listHomeFeed = createServerFn({ method: 'GET' })
       limit: z.number().int().min(1).max(50).default(20),
       tag: z.string().optional(),
       q: z.string().max(200).optional(),
-      filter: z.enum(['all', 'archived']).optional(),
+      filter: z.enum(['all', 'archived', 'deleted']).optional(),
+      visibility: z.enum(['public', 'private']).optional(),
+      favorited: z.boolean().optional(),
+      from: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      to: z
+        .string()
+        .regex(/^\d{4}-\d{2}-\d{2}$/)
+        .optional(),
+      tzOffsetMinutes: z.number().int().min(-840).max(840).optional(),
     }),
   )
   .handler(async ({ data, context }) =>
@@ -82,6 +119,11 @@ export const listHomeFeed = createServerFn({ method: 'GET' })
       tag: data.tag,
       q: data.q,
       filter: data.filter,
+      visibility: data.visibility,
+      favorited: data.favorited,
+      from: data.from,
+      to: data.to,
+      tzOffsetMinutes: data.tzOffsetMinutes,
     }),
   )
 
@@ -103,6 +145,18 @@ export const deleteMemo = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) =>
     deleteMemoForUser(context.user.id, data.id),
   )
+
+export const restoreDeletedMemo = createServerFn({ method: 'POST' })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.string().min(1) }))
+  .handler(({ data, context }) =>
+    restoreDeletedMemoForUser(context.user.id, data.id),
+  )
+
+export const purgeMemo = createServerFn({ method: 'POST' })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.string().min(1) }))
+  .handler(({ data, context }) => purgeMemoForUser(context.user.id, data.id))
 
 export const togglePin = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
@@ -198,4 +252,46 @@ export const getRandomMemos = createServerFn({ method: 'GET' })
   .validator(z.object({ n: z.number().int().min(1).max(20).default(8) }))
   .handler(async ({ data, context }) =>
     getRandomMemosForUser(context.user.id, data.n),
+  )
+
+export const getMemoDetail = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(z.object({ id: z.string().min(1) }))
+  .handler(async ({ data, context }) => {
+    const [memo, connections] = await Promise.all([
+      getMemoForUser(context.user.id, data.id),
+      getMemoConnectionsForUser(context.user.id, data.id),
+    ])
+    return { memo, connections }
+  })
+
+export const getReviewMemos = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      mode: z.enum(['random', 'on-this-day', 'least-reviewed']),
+      n: z.number().int().min(1).max(20).default(8),
+      tag: z.string().max(200).optional(),
+      tzOffsetMinutes: z.number().int().min(-840).max(840).optional(),
+    }),
+  )
+  .handler(({ data, context }) => getReviewMemosForUser(context.user.id, data))
+
+export const listMemoVersions = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .validator(z.object({ memoId: z.string().min(1) }))
+  .handler(({ data, context }) =>
+    listMemoVersionsForUser(context.user.id, data.memoId),
+  )
+
+export const restoreMemoVersion = createServerFn({ method: 'POST' })
+  .middleware([authMiddleware])
+  .validator(
+    z.object({
+      memoId: z.string().min(1),
+      versionId: z.string().min(1),
+    }),
+  )
+  .handler(({ data, context }) =>
+    restoreMemoVersionForUser(context.user.id, data.memoId, data.versionId),
   )

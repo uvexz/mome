@@ -1,4 +1,4 @@
-import { and, count, desc, eq } from 'drizzle-orm'
+import { and, count, desc, eq, isNull } from 'drizzle-orm'
 
 import { db } from '#/db'
 import { memos, memoTags, tags } from '#/db/schema'
@@ -18,7 +18,13 @@ export async function listTagsForUser(userId: string): Promise<TagWithCount[]> {
     .select({ tagId: memoTags.tagId, count: count() })
     .from(memoTags)
     .innerJoin(memos, eq(memos.id, memoTags.memoId))
-    .where(and(eq(memos.userId, userId), eq(memos.archived, false)))
+    .where(
+      and(
+        eq(memos.userId, userId),
+        eq(memos.archived, false),
+        isNull(memos.deletedAt),
+      ),
+    )
     .groupBy(memoTags.tagId)
     .orderBy(desc(count()))
 

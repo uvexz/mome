@@ -9,6 +9,7 @@ interface DeleteMemoDialogProps {
   onOpenChange: (open: boolean) => void
   memo: MemoWithTags | null
   onConfirm: () => Promise<void> | void
+  permanent?: boolean
 }
 
 /**
@@ -19,6 +20,7 @@ export function DeleteMemoDialog({
   onOpenChange,
   memo,
   onConfirm,
+  permanent = false,
 }: DeleteMemoDialogProps) {
   const [deleting, setDeleting] = useState(false)
 
@@ -41,7 +43,7 @@ export function DeleteMemoDialog({
       <Dialog className="p-6">
         <div className="mb-4 flex items-start justify-between gap-4">
           <Dialog.Title className="text-base font-semibold">
-            删除这条 memo？
+            {permanent ? '永久删除这条 memo？' : '删除这条 memo？'}
           </Dialog.Title>
           <Dialog.Close
             aria-label="关闭"
@@ -58,7 +60,7 @@ export function DeleteMemoDialog({
           />
         </div>
         <Dialog.Description className="text-sm text-kumo-subtle">
-          删除后无法恢复。
+          {permanent ? '永久删除后无法恢复。' : '删除后可在回收站恢复。'}
           {memo && (
             <>
               <span className="mt-1 line-clamp-2 block text-kumo-default">
@@ -83,7 +85,7 @@ export function DeleteMemoDialog({
             disabled={deleting}
             onClick={() => void handleConfirm()}
           >
-            删除
+            {permanent ? '永久删除' : '删除'}
           </Button>
         </div>
       </Dialog>

@@ -7,6 +7,8 @@ import {
   PencilSimple,
   PushPin,
   PushPinSlash,
+  Quotes,
+  ArrowCounterClockwise,
   Trash,
   TrayArrowUp,
 } from '@phosphor-icons/react'
@@ -20,8 +22,12 @@ interface MemoActionsProps {
   onToggleGlobalPin?: () => void
   onToggleVisibility?: () => void
   onEdit?: () => void
+  onReference?: () => void
   onToggleArchive?: () => void
   onDelete?: () => void
+  deleted?: boolean
+  onRestore?: () => void
+  onPurge?: () => void
 }
 
 export function MemoActions({
@@ -33,8 +39,12 @@ export function MemoActions({
   onToggleGlobalPin,
   onToggleVisibility,
   onEdit,
+  onReference,
   onToggleArchive,
   onDelete,
+  deleted = false,
+  onRestore,
+  onPurge,
 }: MemoActionsProps) {
   return (
     <DropdownMenu>
@@ -52,70 +62,107 @@ export function MemoActions({
       />
       <DropdownMenu.Content sideOffset={6} align="end">
         <DropdownMenu.Group>
-          {onToggleGlobalPin && (
-            <DropdownMenu.Item
-              icon={
-                globalPinned ? (
-                  <PushPinSlash size={15} />
-                ) : (
-                  <PushPin size={15} />
-                )
-              }
-              onClick={onToggleGlobalPin}
-            >
-              {globalPinned ? '取消全局置顶' : '全局置顶'}
-            </DropdownMenu.Item>
-          )}
-          {onTogglePin && (
-            <DropdownMenu.Item
-              icon={pinned ? <PushPinSlash size={15} /> : <PushPin size={15} />}
-              onClick={onTogglePin}
-            >
-              {pinned ? '取消置顶' : '置顶'}
-            </DropdownMenu.Item>
-          )}
-          {onEdit && (
-            <DropdownMenu.Item
-              icon={<PencilSimple size={15} />}
-              onClick={onEdit}
-            >
-              编辑
-            </DropdownMenu.Item>
-          )}
-          {onToggleVisibility && (
-            <DropdownMenu.Item
-              icon={
-                visibility === 'public' ? (
-                  <LockSimple size={15} />
-                ) : (
-                  <GlobeSimple size={15} />
-                )
-              }
-              onClick={onToggleVisibility}
-            >
-              {visibility === 'public' ? '设为私密' : '设为公开'}
-            </DropdownMenu.Item>
-          )}
-          {onToggleArchive && (
-            <DropdownMenu.Item
-              icon={
-                archived ? <TrayArrowUp size={15} /> : <Archive size={15} />
-              }
-              onClick={onToggleArchive}
-            >
-              {archived ? '取消归档' : '归档'}
-            </DropdownMenu.Item>
-          )}
-          {onDelete && (
+          {deleted ? (
             <>
-              <DropdownMenu.Separator />
-              <DropdownMenu.Item
-                variant="danger"
-                icon={<Trash size={15} />}
-                onClick={onDelete}
-              >
-                删除
-              </DropdownMenu.Item>
+              {onRestore && (
+                <DropdownMenu.Item
+                  icon={<ArrowCounterClockwise size={15} />}
+                  onClick={onRestore}
+                >
+                  恢复
+                </DropdownMenu.Item>
+              )}
+              {onPurge && (
+                <>
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item
+                    variant="danger"
+                    icon={<Trash size={15} />}
+                    onClick={onPurge}
+                  >
+                    永久删除
+                  </DropdownMenu.Item>
+                </>
+              )}
+            </>
+          ) : (
+            <>
+              {onToggleGlobalPin && (
+                <DropdownMenu.Item
+                  icon={
+                    globalPinned ? (
+                      <PushPinSlash size={15} />
+                    ) : (
+                      <PushPin size={15} />
+                    )
+                  }
+                  onClick={onToggleGlobalPin}
+                >
+                  {globalPinned ? '取消全局置顶' : '全局置顶'}
+                </DropdownMenu.Item>
+              )}
+              {onTogglePin && (
+                <DropdownMenu.Item
+                  icon={
+                    pinned ? <PushPinSlash size={15} /> : <PushPin size={15} />
+                  }
+                  onClick={onTogglePin}
+                >
+                  {pinned ? '取消置顶' : '置顶'}
+                </DropdownMenu.Item>
+              )}
+              {onEdit && (
+                <DropdownMenu.Item
+                  icon={<PencilSimple size={15} />}
+                  onClick={onEdit}
+                >
+                  编辑
+                </DropdownMenu.Item>
+              )}
+              {onReference && (
+                <DropdownMenu.Item
+                  icon={<Quotes size={15} />}
+                  onClick={onReference}
+                >
+                  引用到新 memo
+                </DropdownMenu.Item>
+              )}
+              {onToggleVisibility && (
+                <DropdownMenu.Item
+                  icon={
+                    visibility === 'public' ? (
+                      <LockSimple size={15} />
+                    ) : (
+                      <GlobeSimple size={15} />
+                    )
+                  }
+                  onClick={onToggleVisibility}
+                >
+                  {visibility === 'public' ? '设为私密' : '设为公开'}
+                </DropdownMenu.Item>
+              )}
+              {onToggleArchive && (
+                <DropdownMenu.Item
+                  icon={
+                    archived ? <TrayArrowUp size={15} /> : <Archive size={15} />
+                  }
+                  onClick={onToggleArchive}
+                >
+                  {archived ? '取消归档' : '归档'}
+                </DropdownMenu.Item>
+              )}
+              {onDelete && (
+                <>
+                  <DropdownMenu.Separator />
+                  <DropdownMenu.Item
+                    variant="danger"
+                    icon={<Trash size={15} />}
+                    onClick={onDelete}
+                  >
+                    删除
+                  </DropdownMenu.Item>
+                </>
+              )}
             </>
           )}
         </DropdownMenu.Group>

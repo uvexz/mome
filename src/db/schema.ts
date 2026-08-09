@@ -24,6 +24,8 @@ export const memos = sqliteTable(
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
     content: text('content').notNull(),
+    // 客户端离线队列重试时用于幂等去重；普通在线创建可为空
+    clientId: text('client_id'),
     // 公开页可见性：public 可被任何人通过 /@username/:id 访问
     visibility: text('visibility', { enum: ['public', 'private'] })
       .notNull()
@@ -33,11 +35,15 @@ export const memos = sqliteTable(
       .notNull()
       .default(false),
     archived: integer('archived', { mode: 'boolean' }).notNull().default(false),
+    deletedAt: integer('deleted_at', { mode: 'timestamp_ms' }),
     createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
     updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
   },
   (t) => [
     index('memos_user_created_idx').on(t.userId, t.createdAt),
+    uniqueIndex('memos_user_client_unique_idx')
+      .on(t.userId, t.clientId)
+      .where(sql`${t.clientId} IS NOT NULL`),
     index('memos_user_pinned_idx').on(t.userId, t.pinned),
     uniqueIndex('memos_user_pinned_unique_idx')
       .on(t.userId)
@@ -130,6 +136,38 @@ export const memoReposts = sqliteTable(
   ],
 )
 
+// ── 入站通知：别人对本人 memo 的互动 ─────────────────────
+export const notifications = sqliteTable(
+  'notifications',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    actorId: text('actor_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    memoId: text('memo_id')
+      .notNull()
+      .references(() => memos.id, { onDelete: 'cascade' }),
+    type: text('type', { enum: ['like', 'comment', 'repost'] }).notNull(),
+    // 点赞/转发使用空串；评论使用 comment id，便于撤回时同步清理
+    referenceId: text('reference_id').notNull().default(''),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    readAt: integer('read_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [
+    uniqueIndex('notifications_event_unique_idx').on(
+      t.type,
+      t.actorId,
+      t.memoId,
+      t.referenceId,
+    ),
+    index('notifications_user_created_idx').on(t.userId, t.createdAt),
+    index('notifications_user_read_idx').on(t.userId, t.readAt),
+  ],
+)
+
 // ── Passkey（WebAuthn 凭据） ────────────────────────────
 export const passkeys = sqliteTable(
   'passkey',
@@ -217,6 +255,60 @@ export const memoTags = sqliteTable(
   ],
 )
 
+// ── memo 引用与反向链接 ─────────────────────────────────
+export const memoLinks = sqliteTable(
+  'memo_links',
+  {
+    sourceId: text('source_id')
+      .notNull()
+      .references(() => memos.id, { onDelete: 'cascade' }),
+    targetId: text('target_id')
+      .notNull()
+      .references(() => memos.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.sourceId, t.targetId] }),
+    index('memo_links_target_idx').on(t.targetId),
+  ],
+)
+
+// ── 回顾事件：用于“较少回顾”排序和回顾统计 ─────────────
+export const memoReviewEvents = sqliteTable(
+  'memo_review_events',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    memoId: text('memo_id')
+      .notNull()
+      .references(() => memos.id, { onDelete: 'cascade' }),
+    reviewedAt: integer('reviewed_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [
+    index('memo_review_events_user_reviewed_idx').on(t.userId, t.reviewedAt),
+    index('memo_review_events_memo_reviewed_idx').on(t.memoId, t.reviewedAt),
+  ],
+)
+
+// ── memo 编辑历史 ───────────────────────────────────────
+export const memoVersions = sqliteTable(
+  'memo_versions',
+  {
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    memoId: text('memo_id')
+      .notNull()
+      .references(() => memos.id, { onDelete: 'cascade' }),
+    content: text('content').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  },
+  (t) => [index('memo_versions_memo_created_idx').on(t.memoId, t.createdAt)],
+)
+
 // ── relations（供 db.query.* 使用） ──────────────────────
 export const memosRelations = relations(memos, ({ many, one }) => ({
   user: one(user, {
@@ -228,6 +320,7 @@ export const memosRelations = relations(memos, ({ many, one }) => ({
   favorites: many(memoFavorites),
   comments: many(memoComments),
   reposts: many(memoReposts),
+  notifications: many(notifications),
 }))
 
 export const tagsRelations = relations(tags, ({ many, one }) => ({

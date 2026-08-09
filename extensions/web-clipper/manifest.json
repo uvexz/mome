@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "mome Web Clipper",
+  "description": "把网页和选中文本快速保存到 mome。",
+  "version": "0.1.0",
+  "permissions": ["activeTab", "contextMenus", "scripting", "storage"],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "保存到 mome",
+    "default_popup": "popup.html"
+  },
+  "options_page": "options.html"
+}

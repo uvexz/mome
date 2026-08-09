@@ -27,6 +27,7 @@ import {
   DownloadSimple,
   Fingerprint,
   House,
+  BookmarkSimple,
   Key,
   ShieldCheck,
   Trash,
@@ -38,6 +39,7 @@ import { z } from 'zod'
 
 import { Avatar } from '#/components/avatar'
 import { authClient } from '#/lib/auth-client'
+import { buildCaptureBookmarklet } from '#/lib/bookmarklet'
 import { relativeTime } from '#/lib/date'
 import { uploadPresignedPost } from '#/lib/upload'
 import { createApiKey, listApiKeys, revokeApiKey } from '#/server/api-keys'
@@ -277,6 +279,7 @@ function SettingsShell({
           )}
           {activeTab === 'api' && (
             <div className="grid gap-8">
+              <BookmarkletSection />
               <ApiKeysSection
                 initialKeys={apiKeys}
                 onChanged={onApiKeysChange}
@@ -287,6 +290,54 @@ function SettingsShell({
         </main>
       </div>
     </>
+  )
+}
+
+function BookmarkletSection() {
+  const linkRef = useRef<HTMLAnchorElement>(null)
+  const [bookmarklet, setBookmarklet] = useState('')
+
+  useEffect(() => {
+    setBookmarklet(buildCaptureBookmarklet(window.location.origin))
+  }, [])
+
+  useEffect(() => {
+    const link = linkRef.current
+    if (!link || !bookmarklet) return
+    link.setAttribute('href', bookmarklet)
+  }, [bookmarklet])
+
+  return (
+    <Section title="快速发布书签">
+      <div className="grid gap-3 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-center">
+        <a
+          ref={linkRef}
+          href="#"
+          draggable
+          title="拖到浏览器书签栏"
+          aria-label="发布到 mome，拖到浏览器书签栏"
+          onClick={(event) => {
+            if (!bookmarklet) event.preventDefault()
+          }}
+          className="inline-flex h-8 items-center justify-center gap-2 rounded-md bg-kumo-base px-3 text-sm font-medium text-kumo-default ring ring-kumo-line hover:bg-kumo-tint focus:outline-none focus-visible:ring-2 focus-visible:ring-kumo-brand"
+        >
+          <BookmarkSimple size={14} />
+          发布到 mome
+        </a>
+        <ClipboardText
+          text="javascript:…"
+          textToCopy={bookmarklet}
+          size="sm"
+          className="w-full"
+          tooltip={{
+            text: '复制书签代码',
+            copiedText: '已复制书签代码',
+            side: 'top',
+          }}
+          labels={{ copyAction: '复制书签代码' }}
+        />
+      </div>
+    </Section>
   )
 }
 
@@ -1145,6 +1196,7 @@ function ApiDocsSection() {
                   ['GET', '/v1/me', '当前用户信息'],
                   ['GET', '/v1/memos', '分页列出 memo'],
                   ['POST', '/v1/memos', '发布 memo'],
+                  ['POST', '/v1/clips', '保存网页剪藏'],
                   ['GET', '/v1/memos/:id', '获取单条 memo'],
                   ['PATCH', '/v1/memos/:id', '更新 memo'],
                   ['DELETE', '/v1/memos/:id', '删除 memo'],
@@ -1217,7 +1269,7 @@ const memo = await res.json()`}
                   ['limit', '每页数量，1–50', '20'],
                   ['tag', '按 #标签 筛选', '—'],
                   ['q', '全文搜索', '—'],
-                  ['filter', 'all / archived', 'all'],
+                  ['filter', 'all / archived / deleted', 'all'],
                 ].map(([param, desc, def]) => (
                   <tr key={param} className="border-b border-kumo-line/60">
                     <td className="py-2 pr-4 font-mono">{param}</td>

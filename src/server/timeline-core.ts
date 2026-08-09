@@ -151,7 +151,12 @@ export interface HomeFeedParams {
   limit?: number
   tag?: string
   q?: string
-  filter?: 'all' | 'archived'
+  filter?: 'all' | 'archived' | 'deleted'
+  visibility?: 'public' | 'private'
+  favorited?: boolean
+  from?: string
+  to?: string
+  tzOffsetMinutes?: number
 }
 
 type HomeCursor = { p: 0 | 1; k?: 'memo' | 'repost'; t: number; i: string }
@@ -167,7 +172,14 @@ export async function listHomeFeedForUser(
 ): Promise<{ items: TimelineItem[]; nextCursor: string | null }> {
   const limit = Math.min(params.limit ?? 20, 50)
 
-  if (params.filter === 'archived') {
+  const ownMemoFilter = Boolean(
+    params.visibility || params.favorited || params.from || params.to,
+  )
+  if (
+    params.filter === 'archived' ||
+    params.filter === 'deleted' ||
+    ownMemoFilter
+  ) {
     const res = await listMemosForUser(
       userId,
       {
@@ -175,7 +187,15 @@ export async function listHomeFeedForUser(
         limit,
         tag: params.tag,
         q: params.q,
-        filter: 'archived',
+        filter:
+          params.filter === 'archived' || params.filter === 'deleted'
+            ? params.filter
+            : 'all',
+        visibility: params.visibility,
+        favorited: params.favorited,
+        from: params.from,
+        to: params.to,
+        tzOffsetMinutes: params.tzOffsetMinutes,
       },
       viewerId,
     )
@@ -271,11 +291,10 @@ async function fetchPinnedMemoRows(
     eq(memos.userId, userId),
     eq(memos.pinned, true),
     eq(memos.archived, false),
+    isNull(memos.deletedAt),
   ]
   if (opts.q) {
-    conditions.push(
-      like(memos.content, sql`${`%${escapeLike(opts.q)}%`} ESCAPE '\\'`),
-    )
+    conditions.push(memoContentSearch(opts.q))
   }
   if (opts.tag) {
     const tagIds = await resolveTagIds(userId, opts.tag)
@@ -318,18 +337,20 @@ async function fetchMergedTimeline(
     eq(memos.userId, userId),
     eq(memos.pinned, false),
     eq(memos.archived, false),
+    isNull(memos.deletedAt),
   ]
   const repostConditions = [
     eq(memoReposts.userId, userId),
     ne(memos.userId, userId),
     eq(memos.visibility, 'public'),
     eq(memos.archived, false),
+    isNull(memos.deletedAt),
   ]
   if (opts.q) {
     const pattern = sql`${`%${escapeLike(opts.q)}%`} ESCAPE '\\'`
-    conditions.push(like(memos.content, pattern))
+    conditions.push(memoContentSearch(opts.q))
     const repostHit = or(
-      like(memos.content, pattern),
+      memoContentSearch(opts.q),
       like(memoReposts.content, pattern),
     )
     if (repostHit) repostConditions.push(repostHit)
@@ -481,6 +502,13 @@ async function fetchMergedTimeline(
   return { items }
 }
 
+function memoContentSearch(query: string): SQL {
+  const phrase = `"${query.trim().replace(/"/g, '""')}"`
+  return sql`${memos.id} IN (
+    SELECT id FROM memos_fts WHERE memos_fts MATCH ${phrase}
+  )`
+}
+
 function parseHomeCursor(cursor?: string): HomeCursor | null {
   if (!cursor) return null
   try {
@@ -530,6 +558,7 @@ export async function listInteractionsForUser(
     eq(memos.visibility, 'public'),
     eq(memos.userId, userId),
   )
+  const activeMemoCond = isNull(memos.deletedAt)
 
   let rows: Array<{
     memo: typeof memos.$inferSelect
@@ -551,6 +580,7 @@ export async function listInteractionsForUser(
         and(
           eq(memoLikes.userId, userId),
           visibleMemoCond,
+          activeMemoCond,
           keysetCondition(memoLikes.createdAt, memoLikes.memoId, cur),
         ),
       )
@@ -575,6 +605,7 @@ export async function listInteractionsForUser(
         and(
           eq(memoFavorites.userId, userId),
           visibleMemoCond,
+          activeMemoCond,
           keysetCondition(memoFavorites.createdAt, memoFavorites.memoId, cur),
         ),
       )
@@ -600,6 +631,7 @@ export async function listInteractionsForUser(
         and(
           eq(memoComments.userId, userId),
           visibleMemoCond,
+          activeMemoCond,
           keysetCondition(memoComments.createdAt, memoComments.id, cur),
         ),
       )
@@ -625,6 +657,7 @@ export async function listInteractionsForUser(
         and(
           eq(memoReposts.userId, userId),
           visibleMemoCond,
+          activeMemoCond,
           keysetCondition(memoReposts.createdAt, memoReposts.memoId, cur),
         ),
       )

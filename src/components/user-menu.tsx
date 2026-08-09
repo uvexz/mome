@@ -3,6 +3,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { Button, DropdownMenu } from '@cloudflare/kumo'
 import {
   ArrowsLeftRight,
+  Bell,
   GearSix,
   ShieldCheck,
   SignOut,
@@ -11,6 +12,7 @@ import {
 
 import { authClient } from '#/lib/auth-client'
 import { getAdminGate } from '#/server/admin'
+import { getUnreadNotificationCount } from '#/server/notifications'
 
 import { Avatar } from './avatar'
 
@@ -19,12 +21,19 @@ export function UserMenu() {
   const navigate = useNavigate()
   const { data: session } = authClient.useSession()
   const [showAdmin, setShowAdmin] = useState(false)
+  const [unread, setUnread] = useState(0)
   const user = session?.user
   useEffect(() => {
     void getAdminGate()
       .then((gate) => setShowAdmin(gate.isAdmin || !gate.hasAdmin))
       .catch(() => {})
   }, [])
+  useEffect(() => {
+    if (!user) return
+    void getUnreadNotificationCount()
+      .then((result) => setUnread(result.count))
+      .catch(() => {})
+  }, [user])
   if (!user) return null
 
   async function handleSignOut() {
@@ -69,6 +78,22 @@ export function UserMenu() {
               我的主页
             </DropdownMenu.Item>
           )}
+          <DropdownMenu.Item
+            icon={<Bell size={15} />}
+            onClick={() => {
+              setUnread(0)
+              void navigate({ to: '/notifications' })
+            }}
+          >
+            <span className="flex w-full items-center justify-between gap-4">
+              通知
+              {unread > 0 && (
+                <span className="min-w-5 rounded-full bg-accent px-1.5 text-center font-mono text-[0.9em] text-white">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              )}
+            </span>
+          </DropdownMenu.Item>
           <DropdownMenu.Item
             icon={<ArrowsLeftRight size={15} />}
             onClick={() => void navigate({ to: '/interactions' })}
