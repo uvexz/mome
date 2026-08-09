@@ -1,0 +1,88 @@
+/*
+ * mome — design tokens & global styles
+ * Tailwind CSS v4 (CSS-first) · @cloudflare/kumo · Geist 可变字体
+ * 暗色模式：kumo 用 light-dark() 驱动，`<html data-mode="dark">` 手动切换。
+ */
+@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+@import '@cloudflare/kumo/styles/tailwind';
+@import 'tailwindcss';
+
+@theme {
+  /* ── 字体 ───────────────────────────────────────────── */
+  --font-sans:
+    'Geist Variable', ui-sans-serif, system-ui, -apple-system, 'PingFang SC',
+    'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  --font-mono:
+    'Geist Mono Variable', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  /* ── 中性灰阶（Vercel/Geist 理念，OKLCH 无彩） ───────── */
+  --color-gray-50: oklch(98.5% 0 0);
+  --color-gray-100: oklch(96.8% 0 0);
+  --color-gray-150: oklch(94.5% 0 0);
+  --color-gray-200: oklch(92% 0 0);
+  --color-gray-300: oklch(87% 0 0);
+  --color-gray-400: oklch(70.8% 0 0);
+  --color-gray-500: oklch(55.6% 0 0);
+  --color-gray-600: oklch(43.9% 0 0);
+  --color-gray-700: oklch(37.1% 0 0);
+  --color-gray-800: oklch(26.9% 0 0);
+  --color-gray-900: oklch(21% 0 0);
+  --color-gray-950: oklch(14.5% 0 0);
+  --color-gray-1000: oklch(10% 0 0);
+
+  /* ── 单一强调色（深蓝，暗色模式提亮） ────────────────── */
+  --color-accent: light-dark(
+    oklch(42.4% 0.199 265.638),
+    oklch(70.7% 0.165 254.624)
+  );
+  --color-accent-hover: light-dark(
+    oklch(38% 0.199 265.638),
+    oklch(76% 0.165 254.624)
+  );
+
+  /* ── 贡献图热力等级（数据可视化专用绿阶） ─────────────── */
+  --color-heat-1: light-dark(oklch(92.5% 0.075 155), oklch(33% 0.09 155));
+  --color-heat-2: light-dark(oklch(83% 0.115 155), oklch(45% 0.12 155));
+  --color-heat-3: light-dark(oklch(67% 0.15 155), oklch(58% 0.15 155));
+  --color-heat-4: light-dark(oklch(48% 0.18 155), oklch(72% 0.16 155));
+}
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+  }
+
+  body {
+    margin: 0;
+    min-height: 100%;
+    font-family: var(--font-sans);
+    font-size: 14px; /* 正文基准 14px */
+    line-height: 1.6;
+    color: var(--text-color-kumo-default);
+    background-color: var(--color-kumo-canvas);
+  }
+
+  ::selection {
+    background-color: color-mix(
+      in oklch,
+      var(--color-kumo-brand) 22%,
+      transparent
+    );
+  }
+}
+
+/* 与 kumo 保持一致：亮色为默认，[data-mode="dark"] 走暗色 */
+:root {
+  color-scheme: light;
+}
+[data-mode='dark'] {
+  color-scheme: dark;
+}
+
+/* 发丝级分隔线工具 */
+@utility hairline {
+  @apply ring ring-kumo-line;
+}

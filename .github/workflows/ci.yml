@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: file:/tmp/mome-ci.db
+      BETTER_AUTH_URL: http://localhost:3000
+      BETTER_AUTH_SECRET: ci-secret-0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: bun install --frozen-lockfile
+      - run: bun run typecheck
+      - run: bun run lint
+      - run: bun run check
+      - run: bun run test
+      - run: bun run build
+      - run: printf 'DATABASE_URL=%s\nBETTER_AUTH_URL=%s\nBETTER_AUTH_SECRET=%s\n' "$DATABASE_URL" "$BETTER_AUTH_URL" "$BETTER_AUTH_SECRET" > .env.local
+      - run: bun run db:migrate
+      - run: bun run test:integration

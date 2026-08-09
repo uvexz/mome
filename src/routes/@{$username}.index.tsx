@@ -1,0 +1,305 @@
+import {
+  createFileRoute,
+  notFound,
+  useLoaderData,
+  useNavigate,
+} from '@tanstack/react-router'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Button, Loader, useKumoToastManager } from '@cloudflare/kumo'
+import { ArrowLeft } from '@phosphor-icons/react'
+
+import { authClient } from '#/lib/auth-client'
+import { Avatar } from '#/components/avatar'
+import { MemoCard } from '#/components/memo-card'
+import { MemoCommentsDialog } from '#/components/memo-comments-dialog'
+import { RepostDialog } from '#/components/repost-dialog'
+import { toggleFavorite, toggleLike } from '#/server/interactions'
+import type { MemoCounts } from '#/server/interactions-core'
+import { getPublicProfile, listPublicMemos } from '#/server/public'
+import type { PublicFeedItem, PublicProfile } from '#/server/public-core'
+import type { MemoWithTags } from '#/server/memos'
+
+export const Route = createFileRoute('/@{$username}/')({
+  loader: async ({ params }) => {
+    const profile = await getPublicProfile({
+      data: { username: params.username },
+    })
+    if (!profile) throw notFound()
+    return profile
+  },
+  component: ProfilePage,
+})
+
+function ProfilePage() {
+  const profile = useLoaderData({ from: '/@{$username}/' })
+  const navigate = useNavigate()
+  const toast = useKumoToastManager()
+  const { data: session } = authClient.useSession()
+
+  const [items, setItems] = useState<PublicFeedItem[]>([])
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [commenting, setCommenting] = useState<MemoWithTags | null>(null)
+  const [commentOpen, setCommentOpen] = useState(false)
+  const [reposting, setReposting] = useState<MemoWithTags | null>(null)
+  const [repostOpen, setRepostOpen] = useState(false)
+  const reqIdRef = useRef(0)
+
+  const load = useCallback(
+    async (page: 'first' | 'next') => {
+      const id = ++reqIdRef.current
+      setLoading(true)
+      try {
+        const res = await listPublicMemos({
+          data: {
+            username: profile.username,
+            cursor:
+              page === 'next' ? (cursorRef.current ?? undefined) : undefined,
+            limit: 20,
+          },
+        })
+        if (id !== reqIdRef.current) return
+        setItems((prev) =>
+          page === 'first' ? res.items : [...prev, ...res.items],
+        )
+        setCursor(res.nextCursor)
+        setHasMore(res.nextCursor !== null)
+      } catch {
+        if (id === reqIdRef.current) {
+          toast.add({ title: '加载失败', variant: 'error' })
+        }
+      } finally {
+        if (id === reqIdRef.current) setLoading(false)
+      }
+    },
+    [profile.username],
+  )
+  const cursorRef = useRef(cursor)
+  cursorRef.current = cursor
+
+  useEffect(() => {
+    void load('first')
+  }, [profile.username])
+
+  function requireLogin(): boolean {
+    if (session?.user) return true
+    void navigate({ to: '/login' })
+    return false
+  }
+
+  function patchItem(id: string, patch: Partial<MemoWithTags>) {
+    setItems((prev) =>
+      prev.map((i) =>
+        i.memo.id === id ? { ...i, memo: { ...i.memo, ...patch } } : i,
+      ),
+    )
+  }
+
+  async function handleLike(memo: MemoWithTags) {
+    if (!requireLogin()) return
+    try {
+      const res = await toggleLike({ data: { memoId: memo.id } })
+      patchItem(memo.id, {
+        counts: res.counts,
+        viewerState: { ...memo.viewerState, liked: res.liked },
+      })
+    } catch (err) {
+      toast.add({
+        title: '点赞失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'error',
+      })
+    }
+  }
+
+  async function handleFavorite(memo: MemoWithTags) {
+    if (!requireLogin()) return
+    try {
+      const res = await toggleFavorite({ data: { memoId: memo.id } })
+      patchItem(memo.id, {
+        counts: res.counts,
+        viewerState: { ...memo.viewerState, favorited: res.favorited },
+      })
+    } catch (err) {
+      toast.add({
+        title: '收藏失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'error',
+      })
+    }
+  }
+
+  function handleComment(memo: MemoWithTags) {
+    if (!requireLogin()) return
+    setCommenting(memo)
+    setCommentOpen(true)
+  }
+
+  function handleRepost(memo: MemoWithTags) {
+    if (!requireLogin()) return
+    setReposting(memo)
+    setRepostOpen(true)
+  }
+
+  function handleReposted(
+    memo: MemoWithTags,
+    counts: MemoCounts,
+    reposted: boolean,
+    content: string | null,
+  ) {
+    setItems((prev) =>
+      prev.map((i) =>
+        i.memo.id === memo.id
+          ? {
+              ...i,
+              memo: {
+                ...i.memo,
+                counts,
+                viewerState: {
+                  ...i.memo.viewerState,
+                  reposted,
+                  repostedContent: content,
+                },
+              },
+            }
+          : i,
+      ),
+    )
+  }
+
+  return (
+    <div className="min-h-dvh">
+      <header className="sticky top-0 z-40 border-b border-kumo-line bg-kumo-canvas/85 backdrop-blur">
+        <div className="mx-auto flex h-14 w-full max-w-[640px] items-center gap-3 px-4">
+          <Button
+            variant="ghost"
+            shape="square"
+            icon={<ArrowLeft size={16} />}
+            aria-label="返回"
+            title="返回"
+            onClick={() => void navigate({ to: '/' })}
+          />
+          <div className="flex items-center gap-2 text-sm font-semibold text-kumo-strong">
+            {profile.name}
+          </div>
+          <span className="font-mono text-xs text-kumo-subtle">
+            @{profile.username}
+          </span>
+        </div>
+      </header>
+
+      <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-8">
+        <ProfileHeader profile={profile} />
+
+        {loading && items.length === 0 ? (
+          <div className="flex justify-center py-16">
+            <Loader size="base" />
+          </div>
+        ) : items.length === 0 ? (
+          <p className="py-16 text-center text-sm text-kumo-subtle">
+            还没有公开 memo。
+          </p>
+        ) : (
+          <div className="mt-6 grid gap-2">
+            {items.map((item) => (
+              <MemoCard
+                key={`${item.kind}-${item.memo.id}`}
+                memo={item.memo}
+                profileUsername={profile.username}
+                author={item.author}
+                repost={item.repost}
+                hideVisibility
+                onLike={(m) => void handleLike(m)}
+                onFavorite={(m) => void handleFavorite(m)}
+                onComment={handleComment}
+                onRepost={handleRepost}
+              />
+            ))}
+          </div>
+        )}
+
+        {hasMore && !loading && (
+          <div className="py-6 text-center">
+            <Button variant="secondary" onClick={() => void load('next')}>
+              加载更多
+            </Button>
+          </div>
+        )}
+        {loading && items.length > 0 && (
+          <div className="flex justify-center py-6">
+            <Loader size="sm" />
+          </div>
+        )}
+      </main>
+
+      <MemoCommentsDialog
+        open={commentOpen}
+        onOpenChange={setCommentOpen}
+        memo={commenting}
+        onCountChange={(count) =>
+          commenting &&
+          setItems((prev) =>
+            prev.map((i) =>
+              i.memo.id === commenting.id
+                ? {
+                    ...i,
+                    memo: {
+                      ...i.memo,
+                      counts: { ...i.memo.counts, comments: count },
+                    },
+                  }
+                : i,
+            ),
+          )
+        }
+      />
+      <RepostDialog
+        open={repostOpen}
+        onOpenChange={setRepostOpen}
+        memo={reposting}
+        onReposted={(counts, reposted, content) =>
+          reposting && handleReposted(reposting, counts, reposted, content)
+        }
+      />
+    </div>
+  )
+}
+
+function ProfileHeader({ profile }: { profile: PublicProfile }) {
+  return (
+    <section className="grid gap-4">
+      <div className="flex items-center gap-4">
+        <Avatar image={profile.image} size={64} className="shrink-0" />
+        <div className="min-w-0">
+          <h1 className="text-lg font-semibold text-kumo-strong">
+            {profile.name}
+          </h1>
+          <p className="font-mono text-sm text-kumo-subtle">
+            @{profile.username}
+          </p>
+        </div>
+      </div>
+      {profile.bio && (
+        <p className="whitespace-pre-wrap text-sm leading-relaxed text-kumo-default">
+          {profile.bio}
+        </p>
+      )}
+      <div className="flex items-center gap-5 text-xs text-kumo-subtle">
+        <span>
+          公开 memo{' '}
+          <span className="font-mono text-[0.9em] text-kumo-default">
+            {profile.stats.memos}
+          </span>
+        </span>
+        <span>
+          转发{' '}
+          <span className="font-mono text-[0.9em] text-kumo-default">
+            {profile.stats.reposts}
+          </span>
+        </span>
+        <span>加入于 {new Date(profile.createdAt).getFullYear()}</span>
+      </div>
+    </section>
+  )
+}
