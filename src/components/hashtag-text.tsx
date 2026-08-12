@@ -36,14 +36,14 @@ export const HashtagText = memo(function HashtagText({
   // 避免块元素之间的换行文本节点被渲染成空行
   return (
     <HashtagClickContext.Provider value={onTagClick ?? null}>
-      <span className="break-words">
+      <div className="min-w-0 max-w-full break-words">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
           components={markdownComponents}
         >
           {renderMemoReferences(content)}
         </ReactMarkdown>
-      </span>
+      </div>
     </HashtagClickContext.Provider>
   )
 })
@@ -130,7 +130,7 @@ const markdownComponents: Components = {
       src={src}
       alt={alt ?? ''}
       loading="lazy"
-      className="my-2 max-w-full rounded-lg"
+      className="my-2 block h-auto max-w-full rounded-lg"
     />
   ),
   table: ({ children }) => (

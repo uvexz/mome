@@ -2,11 +2,14 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { Button, DropdownMenu } from '@cloudflare/kumo'
 import {
+  Archive,
   ArrowsLeftRight,
   Bell,
   GearSix,
+  House,
   ShieldCheck,
   SignOut,
+  Trash,
   UserCircle,
 } from '@phosphor-icons/react'
 
@@ -16,7 +19,7 @@ import { getUnreadNotificationCount } from '#/server/notifications'
 
 import { Avatar } from './avatar'
 
-/** 顶栏 / 公共主页共用的用户菜单（我的主页 / 设置 / 退出登录） */
+/** 顶栏 / 公共主页共用的用户菜单 */
 export function UserMenu() {
   const navigate = useNavigate()
   const { data: session } = authClient.useSession()
@@ -65,41 +68,81 @@ export function UserMenu() {
             <span className="block text-xs text-kumo-subtle">{user.email}</span>
           </DropdownMenu.Label>
           <DropdownMenu.Separator />
-          {user.username && (
-            <DropdownMenu.Item
-              icon={<UserCircle size={15} />}
-              onClick={() =>
-                void navigate({
-                  to: '/@{$username}',
-                  params: { username: user.username! },
-                })
-              }
-            >
-              我的主页
-            </DropdownMenu.Item>
-          )}
-          <DropdownMenu.Item
-            icon={<Bell size={15} />}
-            onClick={() => {
-              setUnread(0)
-              void navigate({ to: '/notifications' })
-            }}
-          >
-            <span className="flex w-full items-center justify-between gap-4">
-              通知
-              {unread > 0 && (
-                <span className="min-w-5 rounded-full bg-accent px-1.5 text-center font-mono text-[0.9em] text-white">
-                  {unread > 99 ? '99+' : unread}
-                </span>
-              )}
-            </span>
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
-            icon={<ArrowsLeftRight size={15} />}
-            onClick={() => void navigate({ to: '/interactions' })}
-          >
-            互动
-          </DropdownMenu.Item>
+          <DropdownMenu.Sub>
+            <DropdownMenu.SubTrigger icon={House}>
+              我的内容
+            </DropdownMenu.SubTrigger>
+            <DropdownMenu.SubContent>
+              <DropdownMenu.Group>
+                {user.username && (
+                  <DropdownMenu.Item
+                    icon={<UserCircle size={15} />}
+                    onClick={() =>
+                      void navigate({
+                        to: '/@{$username}',
+                        params: { username: user.username! },
+                      })
+                    }
+                  >
+                    我的主页
+                  </DropdownMenu.Item>
+                )}
+                <DropdownMenu.Item
+                  icon={<Archive size={15} />}
+                  onClick={() =>
+                    void navigate({
+                      to: '/',
+                      search: { filter: 'archived' },
+                    })
+                  }
+                >
+                  归档
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  icon={<Trash size={15} />}
+                  onClick={() =>
+                    void navigate({
+                      to: '/',
+                      search: { filter: 'deleted' },
+                    })
+                  }
+                >
+                  回收站
+                </DropdownMenu.Item>
+              </DropdownMenu.Group>
+            </DropdownMenu.SubContent>
+          </DropdownMenu.Sub>
+          <DropdownMenu.Sub>
+            <DropdownMenu.SubTrigger icon={Bell}>
+              <span className="flex w-full items-center justify-between gap-4">
+                通知与互动
+                {unread > 0 && (
+                  <span className="min-w-5 rounded-full bg-accent px-1.5 text-center font-mono text-[0.9em] text-white">
+                    {unread > 99 ? '99+' : unread}
+                  </span>
+                )}
+              </span>
+            </DropdownMenu.SubTrigger>
+            <DropdownMenu.SubContent>
+              <DropdownMenu.Group>
+                <DropdownMenu.Item
+                  icon={<Bell size={15} />}
+                  onClick={() => {
+                    setUnread(0)
+                    void navigate({ to: '/notifications' })
+                  }}
+                >
+                  通知
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  icon={<ArrowsLeftRight size={15} />}
+                  onClick={() => void navigate({ to: '/interactions' })}
+                >
+                  互动
+                </DropdownMenu.Item>
+              </DropdownMenu.Group>
+            </DropdownMenu.SubContent>
+          </DropdownMenu.Sub>
           <DropdownMenu.Item
             icon={<GearSix size={15} />}
             onClick={() => void navigate({ to: '/settings' })}

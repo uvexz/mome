@@ -5,7 +5,7 @@ import {
   useSearch,
 } from '@tanstack/react-router'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Loader, Tabs, useKumoToastManager } from '@cloudflare/kumo'
+import { Loader, useKumoToastManager } from '@cloudflare/kumo'
 
 import { Composer } from '#/components/composer'
 import { ContributionGraph } from '#/components/contribution-graph'
@@ -15,6 +15,7 @@ import { EmptyState } from '#/components/empty-state'
 import { MemoCommentsDialog } from '#/components/memo-comments-dialog'
 import { MemoFeed } from '#/components/memo-feed'
 import { RepostDialog } from '#/components/repost-dialog'
+import { SearchFiltersDialog } from '#/components/search-filters-dialog'
 import { SiteHeader } from '#/components/site-header'
 import { TagList } from '#/components/tag-list'
 import { homeSearchSchema } from '#/lib/search'
@@ -72,6 +73,7 @@ function Home() {
   const [commentOpen, setCommentOpen] = useState(false)
   const [reposting, setReposting] = useState<MemoWithTags | null>(null)
   const [repostOpen, setRepostOpen] = useState(false)
+  const [filtersOpen, setFiltersOpen] = useState(false)
 
   // 避免闭包捕获过期值
   const searchRef = useRef(search)
@@ -90,6 +92,9 @@ function Home() {
     search.favorited ||
     search.from ||
     search.to,
+  )
+  const hasContentFilters = Boolean(
+    search.visibility || search.favorited || search.from || search.to,
   )
 
   // ── 加载 ────────────────────────────────────────────────
@@ -488,48 +493,13 @@ function Home() {
 
   const archivedView = search.filter === 'archived'
   const deletedView = search.filter === 'deleted'
-  const activeView = deletedView ? 'deleted' : archivedView ? 'archived' : 'all'
 
   return (
     <div className="min-h-dvh">
-      <SiteHeader
-        search={search}
-        onSearchChange={(q) => updateSearch({ q })}
-        onFilterChange={updateSearch}
-      />
+      <SiteHeader search={search} onSearchChange={(q) => updateSearch({ q })} />
 
       <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-8">
         <div className="grid gap-6">
-          <Tabs
-            value={activeView}
-            variant="segmented"
-            tabs={[
-              {
-                value: 'all',
-                label: '我的',
-                className: 'flex-1 justify-center text-sm',
-              },
-              {
-                value: 'archived',
-                label: '归档',
-                className: 'flex-1 justify-center text-sm',
-              },
-              {
-                value: 'deleted',
-                label: '回收站',
-                className: 'flex-1 justify-center text-sm',
-              },
-            ]}
-            onValueChange={(value) =>
-              updateSearch({
-                filter:
-                  value === 'archived' || value === 'deleted'
-                    ? value
-                    : undefined,
-              })
-            }
-          />
-
           {!deletedView && (
             <Composer
               onCreated={handleCreated}
@@ -629,6 +599,8 @@ function Home() {
                 setReposting(m)
                 setRepostOpen(true)
               }}
+              onFilter={() => setFiltersOpen(true)}
+              filterActive={hasContentFilters}
             />
           )}
 
@@ -711,6 +683,12 @@ function Home() {
         onReposted={(counts, reposted, content) =>
           reposting && handleReposted(reposting, counts, reposted, content)
         }
+      />
+      <SearchFiltersDialog
+        open={filtersOpen}
+        onOpenChange={setFiltersOpen}
+        value={search}
+        onApply={updateSearch}
       />
     </div>
   )

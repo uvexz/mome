@@ -11,6 +11,7 @@ describe('capture bookmarklet', () => {
     expect(bookmarklet.startsWith('javascript:')).toBe(true)
     expect(bookmarklet).toContain('https://mome.example.com')
     expect(bookmarklet).toContain('/capture')
+    expect(bookmarklet).toContain('u.searchParams.set("tag","收藏")')
     expect(bookmarklet).not.toContain('mome_')
     expect(bookmarklet).not.toContain('/settings')
   })

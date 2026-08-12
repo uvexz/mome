@@ -7,7 +7,7 @@ import {
 import type { ErrorComponentProps } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
-import { Button, Toasty } from '@cloudflare/kumo'
+import { Button, LinkButton, Toasty } from '@cloudflare/kumo'
 
 import { getAppConfig } from '#/server/config'
 import { ServiceWorkerRegister } from '#/components/service-worker-register'
@@ -82,12 +82,9 @@ function RootErrorComponent({ error, reset }: ErrorComponentProps) {
         <Button variant="secondary" onClick={reset}>
           重试
         </Button>
-        <Link
-          to="/"
-          className="rounded-lg bg-kumo-base px-3 py-1.5 text-sm font-medium text-kumo-default ring ring-kumo-line hover:bg-kumo-tint"
-        >
+        <LinkButton href="/" variant="secondary">
           返回首页
-        </Link>
+        </LinkButton>
       </div>
     </main>
   )

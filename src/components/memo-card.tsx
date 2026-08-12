@@ -127,7 +127,7 @@ export const MemoCard = memoize(function MemoCard({
   }
 
   return (
-    <article className="rounded-xl bg-kumo-base px-5 py-4 ring ring-kumo-line">
+    <article className="min-w-0 rounded-xl bg-kumo-base px-5 py-4 ring ring-kumo-line">
       {repost && (
         <div className="mb-2.5 flex flex-wrap items-start gap-x-1.5 gap-y-0.5 text-xs text-kumo-subtle">
           <span className="h-lh flex shrink-0 items-center">

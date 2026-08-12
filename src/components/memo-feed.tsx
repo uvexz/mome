@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { Loader } from '@cloudflare/kumo'
+import { Button, Loader } from '@cloudflare/kumo'
+import { Funnel } from '@phosphor-icons/react'
 
 import type { MemoWithTags } from '#/server/memos'
 import type { TimelineItem } from '#/server/timeline-core'
@@ -24,6 +25,8 @@ interface MemoFeedProps {
   onFavorite: (memo: MemoWithTags) => void
   onComment: (memo: MemoWithTags) => void
   onRepost: (memo: MemoWithTags) => void
+  onFilter: () => void
+  filterActive: boolean
 }
 
 /** 条目展示时间：转发按转发时间，memo 按创建时间 */
@@ -81,6 +84,8 @@ export function MemoFeed({
   onFavorite,
   onComment,
   onRepost,
+  onFilter,
+  filterActive,
 }: MemoFeedProps) {
   const sentinelRef = useRef<HTMLDivElement>(null)
   const groups = useMemo(() => groupByDay(items, deleted), [deleted, items])
@@ -102,15 +107,30 @@ export function MemoFeed({
 
   return (
     <div className="grid gap-8">
-      {groups.map((group) => (
+      {groups.map((group, index) => (
         <section key={group.date} aria-label={group.label}>
           <div className="mb-3 flex items-center gap-3">
             <h2 className="shrink-0 font-mono text-xs text-kumo-subtle">
               {group.label}
             </h2>
             <div className="h-px flex-1 bg-kumo-line" />
+            {index === 0 && (
+              <Button
+                variant="ghost"
+                shape="square"
+                icon={
+                  <Funnel
+                    size={16}
+                    weight={filterActive ? 'fill' : 'regular'}
+                  />
+                }
+                aria-label="筛选"
+                title="筛选"
+                onClick={onFilter}
+              />
+            )}
           </div>
-          <div className="grid gap-2">
+          <div className="grid min-w-0 gap-2">
             {group.items.map((item) => (
               <MemoCard
                 key={`${item.kind}-${item.memo.id}`}

@@ -9,5 +9,5 @@ export function buildCaptureBookmarklet(value: string): string {
   }
 
   const origin = JSON.stringify(url.origin)
-  return `javascript:(()=>{const u=new URL(${origin}+"/capture");const s=String(getSelection()||"").trim().slice(0,${TEXT_LIMIT});u.searchParams.set("title",document.title.slice(0,${TITLE_LIMIT}));if(s)u.searchParams.set("text",s);u.searchParams.set("url",location.href.slice(0,${URL_LIMIT}));const w=open(u.toString(),"_blank");if(w)w.opener=null;else location.href=u.toString()})()`
+  return `javascript:(()=>{const u=new URL(${origin}+"/capture");const s=String(getSelection()||"").trim().slice(0,${TEXT_LIMIT});u.searchParams.set("title",document.title.slice(0,${TITLE_LIMIT}));if(s)u.searchParams.set("text",s);u.searchParams.set("url",location.href.slice(0,${URL_LIMIT}));u.searchParams.set("tag","收藏");const w=open(u.toString(),"_blank");if(w)w.opener=null;else location.href=u.toString()})()`
 }

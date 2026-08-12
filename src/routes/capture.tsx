@@ -16,6 +16,7 @@ const captureSearchSchema = z.object({
   text: z.string().max(5000).optional(),
   url: z.string().max(2000).optional(),
   reference: z.string().max(100).optional(),
+  tag: z.literal('收藏').optional(),
 })
 
 export const Route = createFileRoute('/capture')({
@@ -87,5 +88,6 @@ function buildSharedContent(
   } else if (title && !text.includes(title)) {
     parts.unshift(title)
   }
+  if (search.tag) parts.push(`#${search.tag}`)
   return parts.join('\n\n')
 }
