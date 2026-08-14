@@ -84,7 +84,6 @@ export async function loadMemoAuthors(
       username: user.username,
       name: user.name,
       image: user.image,
-      email: user.email,
     })
     .from(memos)
     .innerJoin(user, eq(user.id, memos.userId))
@@ -94,7 +93,7 @@ export async function loadMemoAuthors(
       id: r.id,
       username: r.username,
       name: r.name,
-      image: resolveAvatarUrl(r.image, r.email),
+      image: resolveAvatarUrl(r.image),
     })
   }
   return map
@@ -463,7 +462,6 @@ async function fetchMergedTimeline(
         username: true,
         name: true,
         image: true,
-        email: true,
       },
     }),
   ])
@@ -478,7 +476,7 @@ async function fetchMergedTimeline(
         id: me.id,
         username: me.username,
         name: me.name,
-        image: resolveAvatarUrl(me.image, me.email),
+        image: resolveAvatarUrl(me.image),
       }
     : { id: userId, username: 'me', name: '我', image: null }
 
@@ -742,7 +740,7 @@ function parseInteractionCursor(
 }
 
 function parseCursorJson<T>(cursor?: string): T | null {
-  if (!cursor) return null
+  if (!cursor || cursor.length > 256) return null
   try {
     return JSON.parse(Buffer.from(cursor, 'base64url').toString()) as T
   } catch {

@@ -82,7 +82,7 @@ export const listComments = createServerFn({ method: 'GET' })
   .validator(
     z.object({
       memoId: z.string().min(1),
-      cursor: z.string().optional(),
+      cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
     }),
   )
@@ -107,7 +107,7 @@ export const listInteractions = createServerFn({ method: 'GET' })
   .validator(
     z.object({
       kind: z.enum(['likes', 'favorites', 'comments', 'reposts']),
-      cursor: z.string().optional(),
+      cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
     }),
   )

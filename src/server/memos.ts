@@ -56,7 +56,7 @@ export const listMemos = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
   .validator(
     z.object({
-      cursor: z.string().optional(),
+      cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
       tag: z.string().optional(),
       q: z.string().max(200).optional(),
@@ -94,7 +94,7 @@ export const listHomeFeed = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
   .validator(
     z.object({
-      cursor: z.string().optional(),
+      cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
       tag: z.string().optional(),
       q: z.string().max(200).optional(),
@@ -186,12 +186,15 @@ export const setVisibility = createServerFn({ method: 'POST' })
 
 export const exportMemos = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
+  .validator(z.undefined())
   .handler(async ({ context }) => exportMemosForUser(context.user.id))
 
 export const importMemos = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
   .validator(
     z.object({
+      // 单请求上限 2000 条（每条 ≤5000 字符 ≈ 10MB）：服务端函数在框架层
+      // 先解析 JSON 再进入 handler，压降条目数可同时约束内存占用
       memos: z
         .array(
           z.object({
@@ -205,11 +208,11 @@ export const importMemos = createServerFn({ method: 'POST' })
             tags: z.array(z.string()).default([]),
           }),
         )
-        .max(5000),
+        .max(2000),
     }),
   )
   .handler(async ({ data, context }) => {
-    // 导入是重事务操作（单次最多 5000 条），限制频率
+    // 导入是重事务操作（单次最多 2000 条），限制频率
     rateLimitOrThrow(`import-memos:${context.user.id}`, {
       window: 3600,
       max: 10,
@@ -265,7 +268,8 @@ export const getMemoDetail = createServerFn({ method: 'GET' })
     return { memo, connections }
   })
 
-export const getReviewMemos = createServerFn({ method: 'GET' })
+// 注意：此函数会写入回顾事件（副作用），必须用 POST，不能用 GET
+export const getReviewMemos = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
   .validator(
     z.object({

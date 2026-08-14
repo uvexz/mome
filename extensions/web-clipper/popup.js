@@ -55,6 +55,18 @@ async function submitClip() {
     await chrome.runtime.openOptionsPage()
     return
   }
+  // 仅允许 HTTPS（localhost 例外），API key 绝不通过明文 HTTP 传输
+  try {
+    const url = new URL(baseUrl)
+    const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    if (url.protocol !== 'https:' && !(url.protocol === 'http:' && isLocal)) {
+      throw new Error('地址必须使用 HTTPS')
+    }
+  } catch (error) {
+    showStatus(error instanceof Error ? error.message : '地址无效。', true)
+    await chrome.runtime.openOptionsPage()
+    return
+  }
 
   submit.disabled = true
   submit.textContent = '保存中…'

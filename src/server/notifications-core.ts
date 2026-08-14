@@ -90,7 +90,6 @@ export async function listNotificationsForUser(
       actorName: user.name,
       actorUsername: user.username,
       actorImage: user.image,
-      actorEmail: user.email,
     })
     .from(notifications)
     .innerJoin(memos, eq(memos.id, notifications.memoId))
@@ -113,7 +112,7 @@ export async function listNotificationsForUser(
         id: row.actorId,
         name: row.actorName,
         username: row.actorUsername,
-        image: resolveAvatarUrl(row.actorImage, row.actorEmail),
+        image: resolveAvatarUrl(row.actorImage),
       },
     })),
     nextCursor: hasMore ? page[page.length - 1].id : null,

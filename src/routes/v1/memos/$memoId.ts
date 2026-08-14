@@ -7,6 +7,7 @@ import {
   apiJson,
   corsResponse,
   handleApiError,
+  methodNotAllowed,
   readJsonBody,
   requireApiKey,
   validationError,
@@ -34,7 +35,9 @@ const updateMemoSchema = z
       value.visibility !== undefined ||
       value.pinned !== undefined ||
       value.archived !== undefined,
-    { message: '至少提供 content / visibility / pinned / archived 中的一个字段' },
+    {
+      message: '至少提供 content / visibility / pinned / archived 中的一个字段',
+    },
   )
 
 export const Route = createFileRoute('/v1/memos/$memoId')({
@@ -99,6 +102,9 @@ export const Route = createFileRoute('/v1/memos/$memoId')({
         }
       },
       OPTIONS: () => corsResponse(),
+      HEAD: () => methodNotAllowed(),
+      POST: () => methodNotAllowed(),
+      PUT: () => methodNotAllowed(),
     },
   },
 })

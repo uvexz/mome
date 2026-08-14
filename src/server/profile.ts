@@ -1,6 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, randomInt, timingSafeEqual } from 'node:crypto'
 import { and, eq, gt, like, or } from 'drizzle-orm'
 import { z } from 'zod'
 
@@ -12,12 +12,18 @@ import { ulid } from '#/lib/ulid'
 
 import { authMiddleware } from './middleware'
 import { listPasskeysForUser } from './passkeys-core'
-import { clearFailures, rateLimitOrThrow, recordFailure } from './rate-limit'
+import {
+  clearFailures,
+  clientIp,
+  rateLimitOrThrow,
+  recordFailure,
+} from './rate-limit'
 import { loadEmailSettings } from './settings-core'
 
 /** 当前用户资料 + passkey 列表（设置页用） */
 export const getMyProfile = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
+  .validator(z.undefined())
   .handler(async ({ context }) => ({
     user: {
       id: context.user.id,
@@ -32,9 +38,13 @@ export const getMyProfile = createServerFn({ method: 'GET' })
   }))
 
 /**
- * 开发环境专用：读取刚发送的 OTP（仅 NODE_ENV !== production）。
- * 生产环境返回 null，保证不会泄露验证码。
+ * 开发环境专用：读取刚发送的 OTP。
+ * 门控为 fail-closed：仅 `NODE_ENV === 'development'` 且
+ * `MOME_DEV_TOOLS === '1'` 时可用，其余环境一律返回 null。
  */
+const DEV_OTP_ENABLED =
+  process.env.NODE_ENV === 'development' && process.env.MOME_DEV_TOOLS === '1'
+
 export const devGetOtp = createServerFn({ method: 'GET' })
   .validator(
     z.object({
@@ -48,11 +58,7 @@ export const devGetOtp = createServerFn({ method: 'GET' })
     }),
   )
   .handler(async ({ data }) => {
-    if (
-      process.env.NODE_ENV === 'production' ||
-      process.env.MOME_DEV_TOOLS !== '1'
-    )
-      return null
+    if (!DEV_OTP_ENABLED) return null
     const identifier = `${data.type}-otp-${data.email.toLowerCase()}`
     const row = await db.query.verification.findFirst({
       where: and(
@@ -72,14 +78,19 @@ function emailChangeIdentifier(userId: string, email: string): string {
 }
 
 function generateOtp(): string {
-  const value = crypto.getRandomValues(new Uint32Array(1))[0]
-  return String(value % 1_000_000).padStart(6, '0')
+  // randomInt 无模偏差（避免 % 1_000_000 造成的 0.023% 分布偏斜）
+  return String(randomInt(0, 1_000_000)).padStart(6, '0')
 }
 
 function safeEqual(a: string, b: string): boolean {
   const ha = createHash('sha256').update(a).digest()
   const hb = createHash('sha256').update(b).digest()
   return timingSafeEqual(ha, hb)
+}
+
+/** OTP 落库前加盐哈希，避免数据库/备份泄露即拿到可用验证码 */
+function hashOtp(otp: string): string {
+  return createHash('sha256').update(`mome-otp:${otp}`).digest('hex')
 }
 
 export const requestEmailChange = createServerFn({ method: 'POST' })
@@ -119,14 +130,14 @@ export const requestEmailChange = createServerFn({ method: 'POST' })
     })
     if (existing) throw new Error('该邮箱已被使用')
 
-    // 2. 生成新邮箱 OTP
+    // 2. 生成新邮箱 OTP（只存哈希）
     const identifier = emailChangeIdentifier(context.user.id, email)
     const otp = generateOtp()
     await db.delete(verification).where(eq(verification.identifier, identifier))
     await db.insert(verification).values({
       id: ulid(),
       identifier,
-      value: otp,
+      value: hashOtp(otp),
       expiresAt: new Date(Date.now() + EMAIL_CHANGE_TTL_MS),
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -164,7 +175,7 @@ export const confirmEmailChange = createServerFn({ method: 'POST' })
     if (!row) throw new Error('验证码无效或已过期')
     // 错误 5 次即作废当前 OTP，需重新请求
     const failKey = `email-change:otp:${identifier}`
-    if (!safeEqual(row.value, data.otp)) {
+    if (!safeEqual(row.value, hashOtp(data.otp))) {
       if (recordFailure(failKey, 5, 600)) {
         await db.delete(verification).where(eq(verification.id, row.id))
         clearFailures(failKey)
@@ -192,6 +203,12 @@ export const deleteAccount = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
   .validator(z.object({ password: z.string().min(1).max(128) }))
   .handler(async ({ data, context }) => {
+    // 防密码在线爆破（此路径此前完全无节流）
+    rateLimitOrThrow(`delete-account:${context.user.id}:${clientIp()}`, {
+      window: 60,
+      max: 5,
+      message: '尝试过于频繁，请稍后再试',
+    })
     const request = getRequest()
     try {
       await auth.api.verifyPassword({
@@ -199,8 +216,13 @@ export const deleteAccount = createServerFn({ method: 'POST' })
         headers: request.headers,
       })
     } catch {
+      // 连续失败 15 次熔断 15 分钟，要求等待后重试
+      if (recordFailure(`delete-account:fail:${context.user.id}`, 15, 900)) {
+        throw new Error('尝试次数过多，请 15 分钟后再试')
+      }
       throw new Error('当前密码不正确')
     }
+    clearFailures(`delete-account:fail:${context.user.id}`)
 
     const authCtx = await auth.$context
     const userId = context.user.id

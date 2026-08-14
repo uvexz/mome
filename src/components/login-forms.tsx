@@ -224,7 +224,11 @@ function OtpForm({ onDone }: { onDone?: () => void }) {
 
   if (step === 'email') {
     return (
-      <form onSubmit={(e) => void sendCode(e)} className="grid gap-4" noValidate>
+      <form
+        onSubmit={(e) => void sendCode(e)}
+        className="grid gap-4"
+        noValidate
+      >
         <Field label="邮箱" description="验证码将发送到你的邮箱">
           <Input
             type="email"

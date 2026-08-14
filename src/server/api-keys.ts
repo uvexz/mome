@@ -13,6 +13,7 @@ export type { ApiKeyItem }
 
 export const listApiKeys = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
+  .validator(z.undefined())
   .handler(async ({ context }): Promise<ApiKeyItem[]> =>
     listApiKeysForUser(context.user.id),
   )

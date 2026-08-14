@@ -23,6 +23,7 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AtChar123usernameChar125IndexRouteImport } from './routes/@{$username}.index'
 import { Route as AtChar123usernameChar125MemoIdRouteImport } from './routes/@{$username}.$memoId'
 import { Route as ApiDevOtpRouteImport } from './routes/api/dev-otp'
+import { Route as ApiHealthRouteImport } from './routes/api/health'
 import { Route as MemoMemoIdRouteImport } from './routes/memo.$memoId'
 import { Route as V1ClipsRouteImport } from './routes/v1/clips'
 import { Route as V1MeRouteImport } from './routes/v1/me'
@@ -105,6 +106,11 @@ const ApiDevOtpRoute = ApiDevOtpRouteImport.update({
   path: '/api/dev-otp',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiHealthRoute = ApiHealthRouteImport.update({
+  id: '/api/health',
+  path: '/api/health',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const MemoMemoIdRoute = MemoMemoIdRouteImport.update({
   id: '/memo/$memoId',
   path: '/memo/$memoId',
@@ -160,6 +166,7 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
+  '/api/health': typeof ApiHealthRoute
   '/memo/$memoId': typeof MemoMemoIdRoute
   '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
@@ -183,6 +190,7 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
+  '/api/health': typeof ApiHealthRoute
   '/memo/$memoId': typeof MemoMemoIdRoute
   '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
@@ -208,6 +216,7 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
+  '/api/health': typeof ApiHealthRoute
   '/memo/$memoId': typeof MemoMemoIdRoute
   '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
@@ -234,6 +243,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
+    | '/api/health'
     | '/memo/$memoId'
     | '/v1/clips'
     | '/v1/me'
@@ -257,6 +267,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
+    | '/api/health'
     | '/memo/$memoId'
     | '/v1/clips'
     | '/v1/me'
@@ -281,6 +292,7 @@ export interface FileRouteTypes {
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
+    | '/api/health'
     | '/memo/$memoId'
     | '/v1/clips'
     | '/v1/me'
@@ -305,6 +317,7 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
   ApiDevOtpRoute: typeof ApiDevOtpRoute
+  ApiHealthRoute: typeof ApiHealthRoute
   MemoMemoIdRoute: typeof MemoMemoIdRoute
   V1ClipsRoute: typeof V1ClipsRoute
   V1MeRoute: typeof V1MeRoute
@@ -414,6 +427,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDevOtpRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/health': {
+      id: '/api/health'
+      path: '/api/health'
+      fullPath: '/api/health'
+      preLoaderRoute: typeof ApiHealthRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/memo/$memoId': {
       id: '/memo/$memoId'
       path: '/memo/$memoId'
@@ -513,6 +533,7 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
   ApiDevOtpRoute: ApiDevOtpRoute,
+  ApiHealthRoute: ApiHealthRoute,
   MemoMemoIdRoute: MemoMemoIdRoute,
   V1ClipsRoute: V1ClipsRoute,
   V1MeRoute: V1MeRoute,

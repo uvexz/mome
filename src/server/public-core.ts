@@ -81,7 +81,7 @@ export async function getPublicProfileByUsername(
     username: u.username,
     name: u.name,
     bio: u.bio,
-    image: resolveAvatarUrl(u.image, u.email),
+    image: resolveAvatarUrl(u.image),
     createdAt: u.createdAt.toISOString(),
     stats: {
       memos: memoCount,
@@ -233,7 +233,7 @@ export async function listPublicFeed(
       id: u.id,
       username: u.username,
       name: u.name,
-      image: resolveAvatarUrl(u.image, u.email),
+      image: resolveAvatarUrl(u.image),
     }
     const originalAuthor = authorMap.get(c.memoRow.id) ?? profileAuthor
     return {
@@ -275,7 +275,7 @@ function parseFeedCursor(cursor?: string): {
   k: 'memo' | 'repost'
   i: string
 } | null {
-  if (!cursor) return null
+  if (!cursor || cursor.length > 256) return null
   try {
     const parsed: unknown = JSON.parse(
       Buffer.from(cursor, 'base64url').toString(),
@@ -333,7 +333,7 @@ export async function getPublicMemoDetail(
       id: u.id,
       username: u.username,
       name: u.name,
-      image: resolveAvatarUrl(u.image, u.email),
+      image: resolveAvatarUrl(u.image),
     },
   }
 }
@@ -399,7 +399,6 @@ export async function listAllPublicMemos(
         username: user.username,
         name: user.name,
         image: user.image,
-        email: user.email,
       })
       .from(user)
       .where(
@@ -431,7 +430,7 @@ export async function listAllPublicMemos(
         id: author.id,
         username: author.username,
         name: author.name,
-        image: resolveAvatarUrl(author.image, author.email),
+        image: resolveAvatarUrl(author.image),
       } satisfies MemoAuthor,
       repost: null,
     }
@@ -452,7 +451,7 @@ export async function listAllPublicMemos(
 function parseMemoCursor(
   cursor?: string,
 ): { p: 0 | 1; t: number; i: string } | null {
-  if (!cursor) return null
+  if (!cursor || cursor.length > 256) return null
   try {
     const parsed: unknown = JSON.parse(
       Buffer.from(cursor, 'base64url').toString(),

@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import { z } from 'zod'
 
 import {
   loadEmailSettings,
@@ -18,8 +19,9 @@ export interface AppConfig {
 }
 
 /** 客户端可见的站点信息与功能开关（运行时设置 + 环境变量） */
-export const getAppConfig = createServerFn({ method: 'GET' }).handler(
-  async (): Promise<AppConfig> => {
+export const getAppConfig = createServerFn({ method: 'GET' })
+  .validator(z.undefined())
+  .handler(async (): Promise<AppConfig> => {
     const [site, email, s3] = await Promise.all([
       loadSiteSettings(),
       loadEmailSettings(),
@@ -35,5 +37,4 @@ export const getAppConfig = createServerFn({ method: 'GET' }).handler(
       emailProvider: email.provider,
       s3Enabled: s3.enabled,
     }
-  },
-)
+  })

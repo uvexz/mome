@@ -5,6 +5,7 @@ import {
   apiJson,
   corsResponse,
   handleApiError,
+  methodNotAllowed,
   requireApiKey,
   validationError,
 } from '#/server/api'
@@ -33,6 +34,11 @@ export const Route = createFileRoute('/v1/stats')({
         }
       },
       OPTIONS: () => corsResponse(),
+      HEAD: () => methodNotAllowed(),
+      POST: () => methodNotAllowed(),
+      PUT: () => methodNotAllowed(),
+      PATCH: () => methodNotAllowed(),
+      DELETE: () => methodNotAllowed(),
     },
   },
 })

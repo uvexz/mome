@@ -235,10 +235,12 @@ function ExplorePage() {
               {config.siteName}
             </a>
           )}
-          <div className="flex items-center gap-2 text-sm font-semibold text-kumo-strong">
-            <GlobeSimple size={16} weight="duotone" className="text-accent" />
-            公共主页
-          </div>
+          {session?.user && (
+            <div className="flex items-center gap-2 text-sm font-semibold text-kumo-strong">
+              <GlobeSimple size={16} weight="duotone" className="text-accent" />
+              公共主页
+            </div>
+          )}
           <div className="flex-1" />
           {session?.user ? (
             <UserMenu />

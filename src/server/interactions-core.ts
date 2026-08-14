@@ -7,14 +7,11 @@ import {
   memoLikes,
   memoReposts,
   memos,
+  notifications,
   user,
 } from '#/db/schema'
 import { resolveAvatarUrl } from '#/lib/avatar'
 import { ulid } from '#/lib/ulid'
-import {
-  createNotificationForMemo,
-  removeNotificationForMemo,
-} from './notifications-core'
 
 export interface MemoCounts {
   likes: number
@@ -164,25 +161,76 @@ async function assertInteractionAllowed(
   }
 }
 
+/** 事务内为互动写入通知（对方 memo 才通知，重复事件幂等） */
+async function insertNotificationInTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  actorId: string,
+  memoId: string,
+  type: 'like' | 'comment' | 'repost',
+  referenceId = '',
+): Promise<void> {
+  const memo = await tx.query.memos.findFirst({
+    where: and(eq(memos.id, memoId), isNull(memos.deletedAt)),
+    columns: { userId: true },
+  })
+  if (!memo || memo.userId === actorId) return
+  await tx
+    .insert(notifications)
+    .values({
+      id: ulid(),
+      userId: memo.userId,
+      actorId,
+      memoId,
+      type,
+      referenceId,
+      createdAt: new Date(),
+    })
+    .onConflictDoNothing()
+}
+
+async function deleteNotificationInTx(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  actorId: string,
+  memoId: string,
+  type: 'like' | 'comment' | 'repost',
+  referenceId = '',
+): Promise<void> {
+  await tx
+    .delete(notifications)
+    .where(
+      and(
+        eq(notifications.actorId, actorId),
+        eq(notifications.memoId, memoId),
+        eq(notifications.type, type),
+        eq(notifications.referenceId, referenceId),
+      ),
+    )
+}
+
 export async function toggleLikeForUser(
   userId: string,
   memoId: string,
 ): Promise<{ liked: boolean; counts: MemoCounts }> {
   await assertInteractionAllowed(userId, memoId)
-  const existing = await db.query.memoLikes.findFirst({
-    where: and(eq(memoLikes.memoId, memoId), eq(memoLikes.userId, userId)),
+  // 查重 + 写入 + 通知在同一事务内，并发双击只会得到确定性的 toggle 序列，
+  // 不会因主键冲突抛 500，也不会出现"互动成功但通知失败"的不一致
+  const liked = await db.transaction(async (tx) => {
+    const existing = await tx.query.memoLikes.findFirst({
+      where: and(eq(memoLikes.memoId, memoId), eq(memoLikes.userId, userId)),
+    })
+    if (existing) {
+      await tx
+        .delete(memoLikes)
+        .where(and(eq(memoLikes.memoId, memoId), eq(memoLikes.userId, userId)))
+      await deleteNotificationInTx(tx, userId, memoId, 'like')
+      return false
+    }
+    await tx.insert(memoLikes).values({ memoId, userId, createdAt: new Date() })
+    await insertNotificationInTx(tx, userId, memoId, 'like')
+    return true
   })
-  if (existing) {
-    await db
-      .delete(memoLikes)
-      .where(and(eq(memoLikes.memoId, memoId), eq(memoLikes.userId, userId)))
-    await removeNotificationForMemo(userId, memoId, 'like')
-  } else {
-    await db.insert(memoLikes).values({ memoId, userId, createdAt: new Date() })
-    await createNotificationForMemo(userId, memoId, 'like')
-  }
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
-  return { liked: !existing, counts }
+  return { liked, counts }
 }
 
 export async function toggleFavoriteForUser(
@@ -190,25 +238,31 @@ export async function toggleFavoriteForUser(
   memoId: string,
 ): Promise<{ favorited: boolean; counts: MemoCounts }> {
   await assertInteractionAllowed(userId, memoId)
-  const existing = await db.query.memoFavorites.findFirst({
-    where: and(
-      eq(memoFavorites.memoId, memoId),
-      eq(memoFavorites.userId, userId),
-    ),
-  })
-  if (existing) {
-    await db
-      .delete(memoFavorites)
-      .where(
-        and(eq(memoFavorites.memoId, memoId), eq(memoFavorites.userId, userId)),
-      )
-  } else {
-    await db
+  const favorited = await db.transaction(async (tx) => {
+    const existing = await tx.query.memoFavorites.findFirst({
+      where: and(
+        eq(memoFavorites.memoId, memoId),
+        eq(memoFavorites.userId, userId),
+      ),
+    })
+    if (existing) {
+      await tx
+        .delete(memoFavorites)
+        .where(
+          and(
+            eq(memoFavorites.memoId, memoId),
+            eq(memoFavorites.userId, userId),
+          ),
+        )
+      return false
+    }
+    await tx
       .insert(memoFavorites)
       .values({ memoId, userId, createdAt: new Date() })
-  }
+    return true
+  })
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
-  return { favorited: !existing, counts }
+  return { favorited, counts }
 }
 
 export async function toggleRepostForUser(
@@ -217,27 +271,33 @@ export async function toggleRepostForUser(
   content?: string,
 ): Promise<{ reposted: boolean; counts: MemoCounts }> {
   await assertInteractionAllowed(userId, memoId)
-  const existing = await db.query.memoReposts.findFirst({
-    where: and(eq(memoReposts.memoId, memoId), eq(memoReposts.userId, userId)),
-  })
-  if (existing) {
-    await db
-      .delete(memoReposts)
-      .where(
-        and(eq(memoReposts.memoId, memoId), eq(memoReposts.userId, userId)),
-      )
-    await removeNotificationForMemo(userId, memoId, 'repost')
-  } else {
-    await db.insert(memoReposts).values({
+  const reposted = await db.transaction(async (tx) => {
+    const existing = await tx.query.memoReposts.findFirst({
+      where: and(
+        eq(memoReposts.memoId, memoId),
+        eq(memoReposts.userId, userId),
+      ),
+    })
+    if (existing) {
+      await tx
+        .delete(memoReposts)
+        .where(
+          and(eq(memoReposts.memoId, memoId), eq(memoReposts.userId, userId)),
+        )
+      await deleteNotificationInTx(tx, userId, memoId, 'repost')
+      return false
+    }
+    await tx.insert(memoReposts).values({
       memoId,
       userId,
       content: content?.trim() || null,
       createdAt: new Date(),
     })
-    await createNotificationForMemo(userId, memoId, 'repost')
-  }
+    await insertNotificationInTx(tx, userId, memoId, 'repost')
+    return true
+  })
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
-  return { reposted: !existing, counts }
+  return { reposted, counts }
 }
 
 export async function updateRepostForUser(
@@ -266,15 +326,18 @@ export async function addCommentForUser(
   await assertInteractionAllowed(userId, memoId)
   const now = new Date()
   const id = ulid()
-  await db.insert(memoComments).values({
-    id,
-    memoId,
-    userId,
-    content,
-    createdAt: now,
-    updatedAt: now,
+  // 评论与通知写入同一事务，避免"评论成功但通知丢失"的不一致
+  await db.transaction(async (tx) => {
+    await tx.insert(memoComments).values({
+      id,
+      memoId,
+      userId,
+      content,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await insertNotificationInTx(tx, userId, memoId, 'comment', id)
   })
-  await createNotificationForMemo(userId, memoId, 'comment', id)
   const row = await db
     .select({
       id: memoComments.id,
@@ -284,7 +347,6 @@ export async function addCommentForUser(
       authorName: user.name,
       authorUsername: user.username,
       authorImage: user.image,
-      authorEmail: user.email,
     })
     .from(memoComments)
     .innerJoin(user, eq(user.id, memoComments.userId))
@@ -299,7 +361,7 @@ export async function addCommentForUser(
       id: first.authorId,
       name: first.authorName,
       username: first.authorUsername,
-      image: resolveAvatarUrl(first.authorImage, first.authorEmail),
+      image: resolveAvatarUrl(first.authorImage),
     },
   }
 }
@@ -314,8 +376,16 @@ export async function deleteCommentForUser(
   if (!comment || comment.userId !== userId) {
     return { deleted: false, counts: EMPTY_COUNTS }
   }
-  await db.delete(memoComments).where(eq(memoComments.id, commentId))
-  await removeNotificationForMemo(userId, comment.memoId, 'comment', commentId)
+  await db.transaction(async (tx) => {
+    await tx.delete(memoComments).where(eq(memoComments.id, commentId))
+    await deleteNotificationInTx(
+      tx,
+      userId,
+      comment.memoId,
+      'comment',
+      commentId,
+    )
+  })
   const counts =
     (await loadMemoCounts([comment.memoId])).get(comment.memoId) ?? EMPTY_COUNTS
   return { deleted: true, counts }
@@ -352,7 +422,6 @@ export async function listCommentsForMemo(
       authorName: user.name,
       authorUsername: user.username,
       authorImage: user.image,
-      authorEmail: user.email,
     })
     .from(memoComments)
     .innerJoin(user, eq(user.id, memoComments.userId))
@@ -371,7 +440,7 @@ export async function listCommentsForMemo(
         id: r.authorId,
         name: r.authorName,
         username: r.authorUsername,
-        image: resolveAvatarUrl(r.authorImage, r.authorEmail),
+        image: resolveAvatarUrl(r.authorImage),
       },
     })),
     nextCursor: hasMore ? page[page.length - 1].id : null,

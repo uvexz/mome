@@ -671,8 +671,11 @@ function GeneralSection({
     if (!file) return
     try {
       const dataUrl = await resizeImage(file)
-      const ext = (file.name.split('.').pop() ?? 'png').toLowerCase()
-      const upload = await getUploadUrl({ data: { kind: 'site-icon', ext } })
+      // resizeImage 统一重编码为 PNG，扩展名必须与真实字节一致，
+      // 否则 S3 策略的 Content-Type 断言（image/png）会拒绝上传
+      const upload = await getUploadUrl({
+        data: { kind: 'site-icon', ext: 'png' },
+      })
       if (upload.mode === 'presigned') {
         const blob = await (await fetch(dataUrl)).blob()
         await uploadPresignedPost(upload, blob)
@@ -733,10 +736,19 @@ function GeneralSection({
           size="sm"
           disabled={!iconUrl.trim()}
           onClick={() => {
-            if (iconUrl.trim()) {
-              onDraftChange({ ...draft, siteIcon: iconUrl.trim() })
-              setIconUrl('')
+            const url = iconUrl.trim()
+            if (!url) return
+            // 站点图标经 <link rel="icon"> 被全站访客浏览器加载，
+            // 仅允许 https 或本地路径，防止 http 明文与追踪滥用
+            if (!/^https:\/\//i.test(url) && !url.startsWith('/')) {
+              toast.add({
+                title: '图标 URL 必须以 https:// 开头',
+                variant: 'error',
+              })
+              return
             }
+            onDraftChange({ ...draft, siteIcon: url })
+            setIconUrl('')
           }}
           className="h-8"
         >
@@ -1294,7 +1306,7 @@ function UsersSection({
                 <Table.Row key={item.id}>
                   <Table.Cell>
                     <div className="flex min-w-0 items-center gap-3">
-                      <Avatar email={item.email} image={item.image} size={32} />
+                      <Avatar image={item.image} size={32} />
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm font-medium text-kumo-strong">

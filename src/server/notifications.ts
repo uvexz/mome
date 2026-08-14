@@ -14,7 +14,7 @@ export const listNotifications = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
   .validator(
     z.object({
-      cursor: z.string().optional(),
+      cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
     }),
   )
@@ -24,6 +24,7 @@ export const listNotifications = createServerFn({ method: 'GET' })
 
 export const getUnreadNotificationCount = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
+  .validator(z.undefined())
   .handler(async ({ context }) => ({
     count: await countUnreadNotificationsForUser(context.user.id),
   }))

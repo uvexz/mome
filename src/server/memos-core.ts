@@ -439,6 +439,7 @@ function parseCursor(cursor: string): {
   c: number
   i: string
 } | null {
+  if (cursor.length > 256) return null
   try {
     const parsed: unknown = JSON.parse(
       Buffer.from(cursor, 'base64url').toString(),

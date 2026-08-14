@@ -16,6 +16,7 @@ export const generatePasskeyRegistrationOptionsFn = createServerFn({
   method: 'GET',
 })
   .middleware([authMiddleware])
+  .validator(z.undefined())
   .handler(async ({ context }) =>
     generatePasskeyRegistrationOptions(
       context.user.id,
@@ -46,11 +47,13 @@ export const verifyPasskeyRegistrationFn = createServerFn({
 
 export const generatePasskeyLoginOptionsFn = createServerFn({
   method: 'GET',
-}).handler(async () => {
-  // 未认证入口：防 challenge 洪泛写库
-  rateLimitOrThrow(`passkey:options:${clientIp()}`, { window: 60, max: 30 })
-  return generatePasskeyLoginOptions()
 })
+  .validator(z.undefined())
+  .handler(async () => {
+    // 未认证入口：防 challenge 洪泛写库
+    rateLimitOrThrow(`passkey:options:${clientIp()}`, { window: 60, max: 30 })
+    return generatePasskeyLoginOptions()
+  })
 
 export const verifyPasskeyLoginFn = createServerFn({ method: 'POST' })
   .validator(
@@ -69,6 +72,7 @@ export const verifyPasskeyLoginFn = createServerFn({ method: 'POST' })
 
 export const listPasskeys = createServerFn({ method: 'GET' })
   .middleware([authMiddleware])
+  .validator(z.undefined())
   .handler(async ({ context }) => listPasskeysForUser(context.user.id))
 
 export const deletePasskey = createServerFn({ method: 'POST' })

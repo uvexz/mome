@@ -21,12 +21,28 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   })
 })
 
+/** 旧版本可能保存了 http 配置：发送前强制 https（localhost 例外） */
+function isAllowedBaseUrl(baseUrl) {
+  try {
+    const url = new URL(baseUrl)
+    const isLocal = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+    return url.protocol === 'https:' || (url.protocol === 'http:' && isLocal)
+  } catch {
+    return false
+  }
+}
+
 async function saveClip(clip) {
   const { baseUrl, apiKey } = await chrome.storage.local.get([
     'baseUrl',
     'apiKey',
   ])
   if (!baseUrl || !apiKey) {
+    await showBadge('!')
+    await chrome.runtime.openOptionsPage()
+    return
+  }
+  if (!isAllowedBaseUrl(baseUrl)) {
     await showBadge('!')
     await chrome.runtime.openOptionsPage()
     return

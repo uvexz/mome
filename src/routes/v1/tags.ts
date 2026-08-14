@@ -4,6 +4,7 @@ import {
   apiJson,
   corsResponse,
   handleApiError,
+  methodNotAllowed,
   requireApiKey,
 } from '#/server/api'
 import { listTagsForUser } from '#/server/tags-core'
@@ -20,6 +21,11 @@ export const Route = createFileRoute('/v1/tags')({
         }
       },
       OPTIONS: () => corsResponse(),
+      HEAD: () => methodNotAllowed(),
+      POST: () => methodNotAllowed(),
+      PUT: () => methodNotAllowed(),
+      PATCH: () => methodNotAllowed(),
+      DELETE: () => methodNotAllowed(),
     },
   },
 })

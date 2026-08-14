@@ -5,6 +5,7 @@ import {
   apiJson,
   corsResponse,
   handleApiError,
+  methodNotAllowed,
   readJsonBody,
   requireApiKey,
   validationError,
@@ -21,14 +22,21 @@ const createMemoSchema = z.object({
   clientId: z.string().uuid().optional(),
 })
 
+// searchParams 全是字符串：'false' 会被 z.coerce.boolean() 反转为 true，
+// 显式解析 true/false 再转换
+const booleanParam = z
+  .enum(['true', 'false'])
+  .optional()
+  .transform((value) => (value === undefined ? undefined : value === 'true'))
+
 const listMemosSchema = z.object({
-  cursor: z.string().optional(),
+  cursor: z.string().max(256).optional(),
   limit: z.coerce.number().int().min(1).max(50).default(20),
   tag: z.string().max(200).optional(),
   q: z.string().max(200).optional(),
   filter: z.enum(['all', 'archived', 'deleted']).optional(),
   visibility: z.enum(['public', 'private']).optional(),
-  favorited: z.coerce.boolean().optional(),
+  favorited: booleanParam,
   from: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/)
@@ -81,6 +89,10 @@ export const Route = createFileRoute('/v1/memos')({
         }
       },
       OPTIONS: () => corsResponse(),
+      HEAD: () => methodNotAllowed(),
+      PUT: () => methodNotAllowed(),
+      PATCH: () => methodNotAllowed(),
+      DELETE: () => methodNotAllowed(),
     },
   },
 })

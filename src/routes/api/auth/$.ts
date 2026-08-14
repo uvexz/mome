@@ -46,9 +46,14 @@ export const Route = createFileRoute('/api/auth/$')({
             columns: { emailVerified: true },
           })
           if (existing && !existing.emailVerified) {
+            // 与 better-auth 对未知邮箱的响应完全一致（401 + 同文案同结构），
+            // 防止通过差异响应枚举"已注册但未验证"的邮箱
             return Response.json(
-              { error: { message: '请先验证邮箱后再登录' } },
-              { status: 403 },
+              {
+                message: 'Invalid email or password',
+                code: 'INVALID_EMAIL_OR_PASSWORD',
+              },
+              { status: 401 },
             )
           }
         }

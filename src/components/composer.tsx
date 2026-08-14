@@ -17,7 +17,7 @@ import {
   removeQueuedMemo,
   saveComposerDraft,
 } from '#/lib/composer-storage'
-import { uploadPresignedPost } from '#/lib/upload'
+import { assertImageSignature, uploadPresignedPost } from '#/lib/upload'
 import { getAppConfig } from '#/server/config'
 import { createMemo } from '#/server/memos'
 import type { MemoWithTags } from '#/server/memos'
@@ -226,15 +226,14 @@ export function Composer({
     setUploading(true)
     try {
       const ext = (file.name.split('.').pop() ?? 'jpg').toLowerCase()
+      // 服务端预签名策略只校验自报 Content-Type，字节层面的类型由这里把关
+      await assertImageSignature(file, ext)
       const upload = await getUploadUrl({ data: { kind: 'memo-image', ext } })
-      let markdown: string
-      if (upload.mode === 'presigned') {
-        await uploadPresignedPost(upload, file)
-        markdown = `![image](${upload.publicUrl})`
-      } else {
-        markdown = `![image](${await fileToDataUrl(file)})`
+      if (upload.mode !== 'presigned') {
+        throw new Error('S3 未配置，图片上传不可用')
       }
-      insertAtCursor(markdown)
+      await uploadPresignedPost(upload, file)
+      insertAtCursor(`![image](${upload.publicUrl})`)
     } catch (err) {
       onError(err instanceof Error ? err.message : '图片上传失败，请重试')
     } finally {
@@ -343,13 +342,4 @@ export function Composer({
       </div>
     </div>
   )
-}
-
-function fileToDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result))
-    reader.onerror = () => reject(new Error('read file failed'))
-    reader.readAsDataURL(file)
-  })
 }

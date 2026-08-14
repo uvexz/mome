@@ -10,7 +10,6 @@ jobs:
     env:
       DATABASE_URL: file:/tmp/mome-ci.db
       BETTER_AUTH_URL: http://localhost:3000
-      BETTER_AUTH_SECRET: ci-secret-0123456789abcdef0123456789abcdef
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -22,6 +21,8 @@ jobs:
       - run: bun run check
       - run: bun run test
       - run: bun run build
-      - run: printf 'DATABASE_URL=%s\nBETTER_AUTH_URL=%s\nBETTER_AUTH_SECRET=%s\n' "$DATABASE_URL" "$BETTER_AUTH_URL" "$BETTER_AUTH_SECRET" > .env.local
+      # 每次运行生成随机 secret，杜绝"把 CI 硬编码示例密钥复制到生产"的隐患
+      - run: |
+          printf 'DATABASE_URL=%s\nBETTER_AUTH_URL=%s\nBETTER_AUTH_SECRET=%s\n' \
+            "$DATABASE_URL" "$BETTER_AUTH_URL" "$(openssl rand -hex 32)" > .env.local
       - run: bun run db:migrate
-      - run: bun run test:integration

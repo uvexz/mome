@@ -7,6 +7,7 @@ import {
   apiJson,
   corsResponse,
   handleApiError,
+  methodNotAllowed,
   readJsonBody,
   requireApiKey,
   validationError,
@@ -21,9 +22,26 @@ const clipTagSchema = z
   .refine((value) => normalizeClipTag(value) !== null, '标签格式不合法')
   .transform((value) => normalizeClipTag(value)!)
 
+// 仅允许 http/https 且有主机名，拒绝 javascript:/data: 等危险协议入库
+const clipUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((value) => {
+    try {
+      const url = new URL(value)
+      return (
+        (url.protocol === 'http:' || url.protocol === 'https:') &&
+        url.hostname.length > 0
+      )
+    } catch {
+      return false
+    }
+  }, '仅支持 http/https URL')
+
 const createClipSchema = z.object({
   title: z.string().trim().max(500).default(''),
-  url: z.string().trim().url().max(2048),
+  url: clipUrlSchema,
   description: z.string().trim().max(1500).default(''),
   content: z.string().trim().max(4000).default(''),
   tags: z.array(clipTagSchema).max(20).default([]),
@@ -67,6 +85,11 @@ export const Route = createFileRoute('/v1/clips')({
         }
       },
       OPTIONS: () => corsResponse(),
+      GET: () => methodNotAllowed(),
+      HEAD: () => methodNotAllowed(),
+      PUT: () => methodNotAllowed(),
+      PATCH: () => methodNotAllowed(),
+      DELETE: () => methodNotAllowed(),
     },
   },
 })

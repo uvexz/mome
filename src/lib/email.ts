@@ -10,25 +10,56 @@ import { loadEmailSettings, loadSiteSettings } from '#/server/settings-core'
 
 const RESEND_URL = 'https://api.resend.com/emails'
 
+/** HTML 转义（siteName 由管理员配置，进入邮件 HTML 上下文前必须转义） */
+function escapeHtml(value: string): string {
+  return value.replace(
+    /[&<>"']/g,
+    (char) =>
+      (
+        ({
+          '&': '&amp;',
+          '<': '&lt;',
+          '>': '&gt;',
+          '"': '&quot;',
+          "'": '&#39;',
+        }) as const
+      )[char] ?? char,
+  )
+}
+
+/** subject 剥离 CR/LF 等控制字符，防止邮件头注入 */
+function sanitizeSubject(value: string): string {
+  return [...value]
+    .map((char) => {
+      const code = char.codePointAt(0) ?? 0
+      return code < 0x20 || code === 0x7f ? ' ' : char
+    })
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function subjectFor(type: string, siteName: string): string {
+  const name = sanitizeSubject(siteName)
   switch (type) {
     case 'sign-in':
-      return `【${siteName}】登录验证码`
+      return `【${name}】登录验证码`
     case 'change-email':
-      return `【${siteName}】更换邮箱验证码`
+      return `【${name}】更换邮箱验证码`
     case 'email-verification':
-      return `【${siteName}】邮箱验证码`
+      return `【${name}】邮箱验证码`
     case 'forget-password':
-      return `【${siteName}】重置密码验证码`
+      return `【${name}】重置密码验证码`
     default:
-      return `【${siteName}】验证码`
+      return `【${name}】验证码`
   }
 }
 
 function otpHtml(otp: string, siteName: string): string {
+  const name = escapeHtml(siteName)
   return `
     <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;max-width:480px;margin:0 auto;padding:24px">
-      <h2 style="font-size:18px;margin:0 0 12px">${siteName} 验证码</h2>
+      <h2 style="font-size:18px;margin:0 0 12px">${name} 验证码</h2>
       <p style="font-size:14px;color:#555">你的验证码是：</p>
       <p style="font-size:28px;font-weight:600;letter-spacing:6px;margin:16px 0">${otp}</p>
       <p style="font-size:13px;color:#999">5 分钟内有效。如果这不是你的操作，请忽略这封邮件。</p>

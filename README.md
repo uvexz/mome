@@ -45,4 +45,15 @@ node .output/server/index.mjs
 - 生产数据库建议用 Turso（`libsql://`），避免本地文件持久化问题
 - 可选 `Dockerfile`（数据卷挂载 `/data/local.db`，启动时自动执行迁移）
 
+## 生产部署注意事项（安全相关，必读）
+
+- **`BETTER_AUTH_URL` 必填且必须是 `https://` 公开地址**：缺失或写成 http 时应用会拒绝启动；它是会话 Origin 校验与 passkey RP 的唯一依据。
+- **`NODE_ENV=production` 必须显式设置**：better-auth 的限流、会话 Secure cookie、dev 工具门控（`/api/dev-otp`）都依赖它；未设置时限流与门控会退化。
+- **反向代理必须覆写 `X-Forwarded-For`**（如 nginx `proxy_set_header X-Forwarded-For $remote_addr;`）：应用限流从该头末跳取客户端 IP，追加模式（nginx 默认 `$proxy_add_x_forwarded_for`）可被伪造头绕过限流。
+- **多实例部署时限流会失效**：内置限流为进程内存实现（单实例设计），多副本/Serverless 请替换为共享存储（Redis）或网关层限流。
+- **S3 桶建议配置生命周期策略**：上传对象不会随 memo/头像删除而清理，建议对 `mome/` 前缀设置生命周期规则控制存储成本。
+- **`ADMIN_TOKEN` 用 `openssl rand -base64 32` 生成**（≥128 位熵），首个管理员诞生后即可移除该环境变量。
+
+## 部署至 PaaS
+
 部署至 PaaS 平台可以参考： https://nitro.build/deploy

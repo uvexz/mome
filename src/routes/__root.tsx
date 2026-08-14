@@ -1,8 +1,10 @@
 import {
   HeadContent,
   Link,
+  Outlet,
   Scripts,
   createRootRoute,
+  useRouter,
 } from '@tanstack/react-router'
 import type { ErrorComponentProps } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
@@ -42,8 +44,30 @@ export const Route = createRootRoute({
       scripts: [{ src: '/theme-init.js' }],
     }
   },
+  component: RootComponent,
   shellComponent: RootDocument,
 })
+
+function RootComponent() {
+  const router = useRouter()
+
+  return (
+    <>
+      <Outlet />
+      <TanStackDevtools
+        config={{
+          position: 'bottom-right',
+        }}
+        plugins={[
+          {
+            name: 'Tanstack Router',
+            render: <TanStackRouterDevtoolsPanel router={router} />,
+          },
+        ]}
+      />
+    </>
+  )
+}
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
@@ -54,17 +78,6 @@ function RootDocument({ children }: { children: React.ReactNode }) {
       <body>
         <ServiceWorkerRegister />
         <Toasty>{children}</Toasty>
-        <TanStackDevtools
-          config={{
-            position: 'bottom-right',
-          }}
-          plugins={[
-            {
-              name: 'Tanstack Router',
-              render: <TanStackRouterDevtoolsPanel />,
-            },
-          ]}
-        />
         <Scripts />
       </body>
     </html>

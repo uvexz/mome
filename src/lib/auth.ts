@@ -8,6 +8,20 @@ import { sendOtpEmail } from '#/lib/email'
 
 const authUrl = process.env.BETTER_AUTH_URL ?? 'http://localhost:3000'
 
+// 生产环境 fail-fast：漏配 BETTER_AUTH_URL 会让 trustedOrigins/passkey RP
+// 回退到 localhost，登录 Origin 校验与 passkey 全部异常（且错误静默）。
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.BETTER_AUTH_URL) {
+    throw new Error('生产环境必须设置 BETTER_AUTH_URL（站点公开地址）')
+  }
+  const parsed = new URL(process.env.BETTER_AUTH_URL)
+  const isLocalhost =
+    parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1'
+  if (parsed.protocol !== 'https:' && !isLocalhost) {
+    throw new Error('生产环境 BETTER_AUTH_URL 必须以 https:// 开头')
+  }
+}
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: 'sqlite' }),
   emailAndPassword: {
@@ -40,6 +54,8 @@ export const auth = betterAuth({
     emailOTP({
       otpLength: 6,
       expiresIn: 300,
+      // OTP 落库前哈希，避免数据库/备份泄露即直接拿到可用验证码
+      storeOTP: 'hashed',
       // OTP 只用于已有账号登录，新用户走邮箱密码 + 用户名注册
       disableSignUp: true,
       // 注册后由核心流程发送 OTP（覆盖默认邮件验证）
@@ -59,9 +75,12 @@ export const auth = betterAuth({
     // cookie 集成插件放在最后，避免 Set-Cookie 被后续插件吞掉
     tanstackStartCookies(),
   ],
-  // 开发放宽限流（本地多设备/测试）；生产收紧
-  rateLimit:
-    process.env.NODE_ENV === 'production'
+  // 开发放宽限流（本地多设备/测试）；生产收紧。
+  // enabled 显式置 true：否则 better-auth 默认仅 NODE_ENV=production 时限流，
+  // 部署环境漏设 NODE_ENV 时全部规则静默关闭。
+  rateLimit: {
+    enabled: true,
+    ...(process.env.NODE_ENV === 'production'
       ? {
           window: 60,
           max: 20,
@@ -91,7 +110,13 @@ export const auth = betterAuth({
             '/email-otp/request-password-reset': { window: 300, max: 30 },
             '/email-otp/reset-password': { window: 60, max: 30 },
           },
-        },
+        }),
+  },
+  // 生产强制 Secure cookie：防止 BETTER_AUTH_URL 误配为 http 时
+  // 会话 cookie 明文传输（站点应整体部署在 TLS 之后）
+  advanced: {
+    useSecureCookies: process.env.NODE_ENV === 'production',
+  },
   // 本地开发端口不定（vite 自动 +1），显式信任；仅开发环境追加 localhost
   trustedOrigins: [
     authUrl,

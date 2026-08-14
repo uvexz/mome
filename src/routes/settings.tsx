@@ -527,24 +527,86 @@ function ProfileSection({
   const [image, setImage] = useState<string | null>(profile.user.image)
   const [imageUrl, setImageUrl] = useState('')
   const [saving, setSaving] = useState(false)
+  const [avatarBusy, setAvatarBusy] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+
+  async function persistAvatar(nextImage: string | null) {
+    const res = await authClient.updateUser({ image: nextImage })
+    if (res.error) throw new Error(res.error.message)
+    setImage(nextImage)
+    await onSaved()
+  }
 
   async function pickFile(file: File | undefined) {
     if (!file) return
+    setAvatarBusy(true)
     try {
       const dataUrl = await resizeAvatar(file)
-      const ext = (file.name.split('.').pop() ?? 'jpg').toLowerCase()
-      const upload = await getUploadUrl({ data: { kind: 'avatar', ext } })
+      // resizeAvatar 统一重编码为 JPEG，扩展名必须与真实字节一致，
+      // 否则 S3 策略的 Content-Type 断言（image/jpeg）会拒绝上传
+      const upload = await getUploadUrl({
+        data: { kind: 'avatar', ext: 'jpg' },
+      })
       if (upload.mode === 'presigned') {
         const blob = await (await fetch(dataUrl)).blob()
         await uploadPresignedPost(upload, blob)
-        setImage(upload.publicUrl)
+        await persistAvatar(upload.publicUrl)
       } else {
-        setImage(dataUrl)
+        await persistAvatar(dataUrl)
       }
-      toast.add({ title: '头像已更新，记得保存', variant: 'success' })
-    } catch {
-      toast.add({ title: '图片处理失败', variant: 'error' })
+      toast.add({ title: '头像已保存', variant: 'success' })
+    } catch (err) {
+      toast.add({
+        title: '头像保存失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'error',
+      })
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+
+  async function useImageUrl() {
+    const url = imageUrl.trim()
+    if (!url) return
+    // 头像会在他人的公开页被浏览器加载：仅允许 https（或本地相对路径），
+    // 拒绝 javascript:/data:/http: 等危险或明文协议
+    if (!/^https:\/\//i.test(url) && !url.startsWith('/')) {
+      toast.add({
+        title: '头像 URL 必须以 https:// 开头',
+        variant: 'error',
+      })
+      return
+    }
+    setAvatarBusy(true)
+    try {
+      await persistAvatar(url)
+      setImageUrl('')
+      toast.add({ title: '头像已保存', variant: 'success' })
+    } catch (err) {
+      toast.add({
+        title: '头像保存失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'error',
+      })
+    } finally {
+      setAvatarBusy(false)
+    }
+  }
+
+  async function removeAvatar() {
+    setAvatarBusy(true)
+    try {
+      await persistAvatar(null)
+      toast.add({ title: '头像已移除', variant: 'success' })
+    } catch (err) {
+      toast.add({
+        title: '头像保存失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'error',
+      })
+    } finally {
+      setAvatarBusy(false)
     }
   }
 
@@ -553,7 +615,6 @@ function ProfileSection({
     try {
       const res = await authClient.updateUser({
         name: name.trim() || profile.user.name,
-        image,
         bio: bio.trim() || undefined,
       })
       if (res.error) throw new Error(res.error.message)
@@ -577,7 +638,7 @@ function ProfileSection({
     >
       <div className="grid gap-4">
         <div className="flex items-center gap-4">
-          <Avatar email={profile.user.email} image={image} size={56} />
+          <Avatar image={image} size={56} />
           <div className="flex flex-wrap items-center gap-2">
             <input
               ref={fileRef}
@@ -593,6 +654,8 @@ function ProfileSection({
                 size="sm"
                 icon={<UploadSimple size={14} />}
                 onClick={() => fileRef.current?.click()}
+                loading={avatarBusy}
+                disabled={avatarBusy}
                 className="h-8"
               >
                 上传头像
@@ -611,7 +674,9 @@ function ProfileSection({
                 variant="ghost"
                 size="sm"
                 icon={<Trash size={14} />}
-                onClick={() => setImage(null)}
+                onClick={() => void removeAvatar()}
+                loading={avatarBusy}
+                disabled={avatarBusy}
                 className="h-8"
               >
                 移除
@@ -631,10 +696,9 @@ function ProfileSection({
           <Button
             variant="secondary"
             size="sm"
-            disabled={!imageUrl.trim()}
-            onClick={() => {
-              if (imageUrl.trim()) setImage(imageUrl.trim())
-            }}
+            disabled={!imageUrl.trim() || avatarBusy}
+            loading={avatarBusy}
+            onClick={() => void useImageUrl()}
             className="h-8"
           >
             使用
@@ -671,6 +735,7 @@ function ProfileSection({
             variant="primary"
             size="sm"
             loading={saving}
+            disabled={avatarBusy}
             onClick={() => void save()}
             className="h-8"
           >

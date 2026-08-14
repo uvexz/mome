@@ -29,8 +29,9 @@ export interface AdminGate {
   currentUserId: string | null
 }
 
-export const getAdminGate = createServerFn({ method: 'GET' }).handler(
-  async (): Promise<AdminGate> => {
+export const getAdminGate = createServerFn({ method: 'GET' })
+  .validator(z.undefined())
+  .handler(async (): Promise<AdminGate> => {
     const sessionUser = await getSessionUserFromRequest()
     const currentUserId = sessionUser?.id ?? null
     const adminExists = await hasAnyAdmin()
@@ -44,14 +45,18 @@ export const getAdminGate = createServerFn({ method: 'GET' }).handler(
       adminTokenConfigured: Boolean(process.env.ADMIN_TOKEN),
       currentUserId,
     }
-  },
-)
+  })
 
 export const claimAdmin = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])
   .validator(z.object({ token: z.string().min(1).max(1024) }))
   .handler(async ({ data, context }): Promise<{ success: boolean }> => {
-    // 防 ADMIN_TOKEN 爆破
+    // 防 ADMIN_TOKEN 爆破：全局按 IP 封顶，防止注册多账号换桶绕过
+    rateLimitOrThrow(`claim-admin:global:${clientIp()}`, {
+      window: 60,
+      max: 10,
+      message: '尝试过于频繁，请稍后再试',
+    })
     rateLimitOrThrow(`claim-admin:${context.user.id}:${clientIp()}`, {
       window: 60,
       max: 5,
@@ -141,6 +146,7 @@ export interface AdminOverview {
 
 export const getAdminOverview = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
+  .validator(z.undefined())
   .handler(async (): Promise<AdminOverview> => {
     const [site, s3, email, userRows, adminRows, memoRows] = await Promise.all([
       loadSiteSettings(),
@@ -315,7 +321,7 @@ export const setUserAdmin = createServerFn({ method: 'POST' })
       })
       if (existing) {
         const rows = await db.select({ total: count() }).from(adminUsers)
-        if (rows.length <= 1) {
+        if ((rows[0]?.total ?? 0) <= 1) {
           throw new Error('至少保留一名管理员')
         }
         await db.delete(adminUsers).where(eq(adminUsers.userId, data.userId))

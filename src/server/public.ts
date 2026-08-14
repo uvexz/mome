@@ -28,7 +28,7 @@ export const listPublicMemos = createServerFn({ method: 'GET' })
   .validator(
     z.object({
       username: usernameSchema,
-      cursor: z.string().optional(),
+      cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
     }),
   )
@@ -54,7 +54,7 @@ export const getPublicMemo = createServerFn({ method: 'GET' })
 export const listPublicTimeline = createServerFn({ method: 'GET' })
   .validator(
     z.object({
-      cursor: z.string().optional(),
+      cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
       tag: z.string().max(100).optional(),
     }),
