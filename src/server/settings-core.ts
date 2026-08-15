@@ -45,19 +45,22 @@ export interface EmailRuntimeSettings {
   }
 }
 
-async function readSettings(): Promise<Map<string, string>> {
-  const rows = await db
+let settingsCache:
+  { expiresAt: number; value: Promise<Map<string, string>> } | undefined
+
+function readSettings(): Promise<Map<string, string>> {
+  const now = Date.now()
+  if (settingsCache && settingsCache.expiresAt > now) return settingsCache.value
+  const value = db
     .select({ key: siteSettings.key, value: siteSettings.value })
     .from(siteSettings)
-  return new Map(rows.map((row) => [row.key, row.value]))
+    .then((rows) => new Map(rows.map((row) => [row.key, row.value])))
+  settingsCache = { expiresAt: now + 60_000, value }
+  return value
 }
 
-export async function getSiteSettingValue(key: string): Promise<string | null> {
-  const row = await db.query.siteSettings.findFirst({
-    where: eq(siteSettings.key, key),
-    columns: { value: true },
-  })
-  return row?.value ?? null
+export function invalidateSettingsCache(): void {
+  settingsCache = undefined
 }
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {

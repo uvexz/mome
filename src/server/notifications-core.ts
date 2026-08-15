@@ -3,7 +3,6 @@ import { and, count, desc, eq, isNull, lt } from 'drizzle-orm'
 import { db } from '#/db'
 import { memos, notifications, user } from '#/db/schema'
 import { resolveAvatarUrl } from '#/lib/avatar'
-import { ulid } from '#/lib/ulid'
 
 export type NotificationType = 'like' | 'comment' | 'repost'
 
@@ -23,50 +22,6 @@ export interface NotificationItem {
     username: string
     image: string | null
   }
-}
-
-export async function createNotificationForMemo(
-  actorId: string,
-  memoId: string,
-  type: NotificationType,
-  referenceId = '',
-): Promise<void> {
-  const memo = await db.query.memos.findFirst({
-    where: and(eq(memos.id, memoId), isNull(memos.deletedAt)),
-    columns: { userId: true },
-  })
-  if (!memo || memo.userId === actorId) return
-
-  await db
-    .insert(notifications)
-    .values({
-      id: ulid(),
-      userId: memo.userId,
-      actorId,
-      memoId,
-      type,
-      referenceId,
-      createdAt: new Date(),
-    })
-    .onConflictDoNothing()
-}
-
-export async function removeNotificationForMemo(
-  actorId: string,
-  memoId: string,
-  type: NotificationType,
-  referenceId = '',
-): Promise<void> {
-  await db
-    .delete(notifications)
-    .where(
-      and(
-        eq(notifications.actorId, actorId),
-        eq(notifications.memoId, memoId),
-        eq(notifications.type, type),
-        eq(notifications.referenceId, referenceId),
-      ),
-    )
 }
 
 export async function listNotificationsForUser(

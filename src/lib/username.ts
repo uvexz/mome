@@ -15,17 +15,3 @@ export function isValidUsername(username: string): boolean {
     USERNAME_RE.test(username)
   )
 }
-
-/** 由邮箱前缀生成一个合法用户名建议 */
-export function usernameSuggestion(email: string): string {
-  const prefix = email.split('@')[0] ?? ''
-  const cleaned = prefix
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, '')
-    .replace(/^[-_]+/, '')
-  if (!cleaned) return `user${Date.now().toString().slice(-6)}`
-  if (cleaned.length < USERNAME_MIN_LENGTH) {
-    return `${cleaned}${Date.now().toString().slice(-4)}`
-  }
-  return cleaned.slice(0, USERNAME_MAX_LENGTH)
-}

@@ -37,39 +37,6 @@ export const getMyProfile = createServerFn({ method: 'GET' })
     passkeys: await listPasskeysForUser(context.user.id),
   }))
 
-/**
- * 开发环境专用：读取刚发送的 OTP。
- * 门控为 fail-closed：仅 `NODE_ENV === 'development'` 且
- * `MOME_DEV_TOOLS === '1'` 时可用，其余环境一律返回 null。
- */
-const DEV_OTP_ENABLED =
-  process.env.NODE_ENV === 'development' && process.env.MOME_DEV_TOOLS === '1'
-
-export const devGetOtp = createServerFn({ method: 'GET' })
-  .validator(
-    z.object({
-      email: z.string().email(),
-      type: z.enum([
-        'sign-in',
-        'email-verification',
-        'forget-password',
-        'change-email',
-      ]),
-    }),
-  )
-  .handler(async ({ data }) => {
-    if (!DEV_OTP_ENABLED) return null
-    const identifier = `${data.type}-otp-${data.email.toLowerCase()}`
-    const row = await db.query.verification.findFirst({
-      where: and(
-        eq(verification.identifier, identifier),
-        gt(verification.expiresAt, new Date()),
-      ),
-    })
-    if (!row) return null
-    return row.value.split(':')[0] ?? null
-  })
-
 // ── 更换邮箱（当前密码 + 新邮箱 OTP） ────────────────────
 const EMAIL_CHANGE_TTL_MS = 5 * 60 * 1000
 

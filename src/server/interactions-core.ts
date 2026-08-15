@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gt, inArray, isNull, or } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 
 import { db } from '#/db'
 import {
@@ -58,38 +58,22 @@ export async function loadMemoCounts(
 ): Promise<Map<string, MemoCounts>> {
   const map = new Map<string, MemoCounts>()
   if (memoIds.length === 0) return map
-  const [likes, favorites, comments, reposts] = await Promise.all([
-    db
-      .select({ memoId: memoLikes.memoId, total: count() })
-      .from(memoLikes)
-      .where(inArray(memoLikes.memoId, memoIds))
-      .groupBy(memoLikes.memoId),
-    db
-      .select({ memoId: memoFavorites.memoId, total: count() })
-      .from(memoFavorites)
-      .where(inArray(memoFavorites.memoId, memoIds))
-      .groupBy(memoFavorites.memoId),
-    db
-      .select({ memoId: memoComments.memoId, total: count() })
-      .from(memoComments)
-      .where(inArray(memoComments.memoId, memoIds))
-      .groupBy(memoComments.memoId),
-    db
-      .select({ memoId: memoReposts.memoId, total: count() })
-      .from(memoReposts)
-      .where(inArray(memoReposts.memoId, memoIds))
-      .groupBy(memoReposts.memoId),
-  ])
-  const likeMap = new Map(likes.map((r) => [r.memoId, r.total]))
-  const favMap = new Map(favorites.map((r) => [r.memoId, r.total]))
-  const commentMap = new Map(comments.map((r) => [r.memoId, r.total]))
-  const repostMap = new Map(reposts.map((r) => [r.memoId, r.total]))
-  for (const id of memoIds) {
-    map.set(id, {
-      likes: likeMap.get(id) ?? 0,
-      favorites: favMap.get(id) ?? 0,
-      comments: commentMap.get(id) ?? 0,
-      reposts: repostMap.get(id) ?? 0,
+  const rows = await db
+    .select({
+      memoId: memos.id,
+      likes: sql<number>`(SELECT count(*) FROM ${memoLikes} WHERE ${memoLikes.memoId} = ${memos.id})`,
+      favorites: sql<number>`(SELECT count(*) FROM ${memoFavorites} WHERE ${memoFavorites.memoId} = ${memos.id})`,
+      comments: sql<number>`(SELECT count(*) FROM ${memoComments} WHERE ${memoComments.memoId} = ${memos.id})`,
+      reposts: sql<number>`(SELECT count(*) FROM ${memoReposts} WHERE ${memoReposts.memoId} = ${memos.id})`,
+    })
+    .from(memos)
+    .where(inArray(memos.id, memoIds))
+  for (const row of rows) {
+    map.set(row.memoId, {
+      likes: Number(row.likes),
+      favorites: Number(row.favorites),
+      comments: Number(row.comments),
+      reposts: Number(row.reposts),
     })
   }
   return map
@@ -104,44 +88,24 @@ export async function loadViewerStates(
     for (const id of memoIds) map.set(id, { ...EMPTY_VIEWER_STATE })
     return map
   }
-  const [likes, favorites, reposts] = await Promise.all([
-    db
-      .select({ memoId: memoLikes.memoId })
-      .from(memoLikes)
-      .where(
-        and(eq(memoLikes.userId, viewerId), inArray(memoLikes.memoId, memoIds)),
-      ),
-    db
-      .select({ memoId: memoFavorites.memoId })
-      .from(memoFavorites)
-      .where(
-        and(
-          eq(memoFavorites.userId, viewerId),
-          inArray(memoFavorites.memoId, memoIds),
-        ),
-      ),
-    db
-      .select({
-        memoId: memoReposts.memoId,
-        content: memoReposts.content,
-      })
-      .from(memoReposts)
-      .where(
-        and(
-          eq(memoReposts.userId, viewerId),
-          inArray(memoReposts.memoId, memoIds),
-        ),
-      ),
-  ])
-  const likeSet = new Set(likes.map((r) => r.memoId))
-  const favSet = new Set(favorites.map((r) => r.memoId))
-  const repostSet = new Set(reposts.map((r) => r.memoId))
-  for (const id of memoIds) {
-    map.set(id, {
-      liked: likeSet.has(id),
-      favorited: favSet.has(id),
-      reposted: repostSet.has(id),
-      repostedContent: reposts.find((r) => r.memoId === id)?.content ?? null,
+  const rows = await db
+    .select({
+      memoId: memos.id,
+      liked: sql<number>`EXISTS(SELECT 1 FROM ${memoLikes} WHERE ${memoLikes.memoId} = ${memos.id} AND ${memoLikes.userId} = ${viewerId})`,
+      favorited: sql<number>`EXISTS(SELECT 1 FROM ${memoFavorites} WHERE ${memoFavorites.memoId} = ${memos.id} AND ${memoFavorites.userId} = ${viewerId})`,
+      reposted: sql<number>`EXISTS(SELECT 1 FROM ${memoReposts} WHERE ${memoReposts.memoId} = ${memos.id} AND ${memoReposts.userId} = ${viewerId})`,
+      repostedContent: sql<
+        string | null
+      >`(SELECT ${memoReposts.content} FROM ${memoReposts} WHERE ${memoReposts.memoId} = ${memos.id} AND ${memoReposts.userId} = ${viewerId} LIMIT 1)`,
+    })
+    .from(memos)
+    .where(inArray(memos.id, memoIds))
+  for (const row of rows) {
+    map.set(row.memoId, {
+      liked: Boolean(row.liked),
+      favorited: Boolean(row.favorited),
+      reposted: Boolean(row.reposted),
+      repostedContent: row.repostedContent,
     })
   }
   return map

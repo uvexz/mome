@@ -56,6 +56,14 @@ export const memos = sqliteTable(
       t.visibility,
       t.createdAt,
     ),
+    index('memos_public_timeline_idx').on(
+      t.visibility,
+      t.archived,
+      t.deletedAt,
+      t.globalPinned,
+      t.createdAt,
+      t.id,
+    ),
   ],
 )
 

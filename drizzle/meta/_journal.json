@@ -64,6 +64,13 @@
       "when": 1786562400000,
       "tag": "0008_gentle_photon",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1786793511342,
+      "tag": "0009_worried_virginia_dare",
+      "breakpoints": true
     }
   ]
 }

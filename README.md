@@ -34,7 +34,7 @@ bun dev
 
 ## 部署
 
-Nitro 默认 `node-server` preset，构建产物在 `.output/`：
+Nitro 默认 `node-server` preset，普通平台使用标准构建产物：
 
 ```bash
 bun run build
@@ -43,7 +43,8 @@ node .output/server/index.mjs
 
 - 平台预设：`vercel` / `cloudflare-pages` 等在 `vite.config.ts` 的 `nitro({ preset })` 中切换
 - 生产数据库建议用 Turso（`libsql://`），避免本地文件持久化问题
-- 可选 `Dockerfile`（数据卷挂载 `/data/local.db`，启动时自动执行迁移）
+- Docker 使用 `bun run build:docker`，将迁移脚本打包进 `.output/` 并在启动时自动执行
+- 可选 `Dockerfile` 数据卷挂载 `/data/local.db`
 
 ## 生产部署注意事项（安全相关，必读）
 

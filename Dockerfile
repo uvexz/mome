@@ -14,14 +14,10 @@ FROM base AS prerelease
 COPY --from=install /temp/dev/node_modules node_modules
 COPY . .
 ENV NODE_ENV=production
-RUN bun run build
+RUN bun run build:docker
 
 FROM base AS release
 COPY --from=prerelease /app/.output /app/.output
-COPY --from=prerelease /app/drizzle /app/drizzle
-COPY --from=prerelease /app/scripts/migrate.mjs /app/scripts/migrate.mjs
-COPY package.json bun.lock /app/
-RUN cd /app && bun install --production --frozen-lockfile
 
 # 非 root 运行：应用与数据卷归 app 用户所有
 RUN useradd --uid 10001 --user-group --create-home app \
@@ -37,4 +33,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["/bin/sh", "-c", "bun -e \"fetch('http://127.0.0.1:3000/api/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))\""]
 
 USER app
-CMD ["/bin/sh", "-c", "bun /app/scripts/migrate.mjs && bun /app/.output/server/index.mjs"]
+CMD ["/bin/sh", "-c", "bun /app/.output/server/migrate.mjs && bun /app/.output/server/index.mjs"]

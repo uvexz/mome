@@ -7,7 +7,6 @@ import {
   deletePasskeyForUser,
   generatePasskeyLoginOptions,
   generatePasskeyRegistrationOptions,
-  listPasskeysForUser,
   verifyPasskeyLogin,
   verifyPasskeyRegistration,
 } from './passkeys-core'
@@ -69,11 +68,6 @@ export const verifyPasskeyLoginFn = createServerFn({ method: 'POST' })
       data.response as Parameters<typeof verifyPasskeyLogin>[1],
     )
   })
-
-export const listPasskeys = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
-  .validator(z.undefined())
-  .handler(async ({ context }) => listPasskeysForUser(context.user.id))
 
 export const deletePasskey = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])

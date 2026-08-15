@@ -411,9 +411,19 @@ export async function listMemosForUser(
     loadMemoCounts(memoIds),
     loadViewerStates(memoIds, viewerId),
   ])
-
+  const tagsByMemo = new Map<string, typeof tagRows>()
+  for (const tag of tagRows) {
+    const list = tagsByMemo.get(tag.memoId) ?? []
+    list.push(tag)
+    tagsByMemo.set(tag.memoId, list)
+  }
   const items = page.map((m) =>
-    toMemoWithTags(m, tagRows, countsMap.get(m.id), viewerMap.get(m.id)),
+    toMemoWithTags(
+      m,
+      tagsByMemo.get(m.id) ?? [],
+      countsMap.get(m.id),
+      viewerMap.get(m.id),
+    ),
   )
   const last = page[page.length - 1]
   let nextCursor: string | null = null
@@ -559,51 +569,57 @@ export async function updateMemoForUser(
     await cleanupOrphanTags(tx, userId)
   })
 
-  const memo = await db.query.memos.findFirst({
-    where: and(
-      eq(memos.id, id),
-      eq(memos.userId, userId),
-      isNull(memos.deletedAt),
-    ),
-  })
-  if (!memo) throw new Error('memo not found')
-  const [tagRows, countsMap, viewerMap] = await Promise.all([
-    loadMemoTags([memo.id]),
-    loadMemoCounts([memo.id]),
-    loadViewerStates([memo.id], userId),
-  ])
-  return toMemoWithTags(
-    memo,
-    tagRows,
-    countsMap.get(memo.id),
-    viewerMap.get(memo.id),
-  )
+  return getMemoForUser(userId, id)
 }
 
 // ── get ─────────────────────────────────────────────────
+async function loadMemosForUserByIds(
+  userId: string,
+  ids: string[],
+): Promise<Map<string, MemoWithTags>> {
+  const uniqueIds = [...new Set(ids)]
+  if (uniqueIds.length === 0) return new Map()
+  const rows = await db
+    .select()
+    .from(memos)
+    .where(
+      and(
+        eq(memos.userId, userId),
+        isNull(memos.deletedAt),
+        inArray(memos.id, uniqueIds),
+      ),
+    )
+  const [tagRows, countsMap, viewerMap] = await Promise.all([
+    loadMemoTags(uniqueIds),
+    loadMemoCounts(uniqueIds),
+    loadViewerStates(uniqueIds, userId),
+  ])
+  const tagsByMemo = new Map<string, typeof tagRows>()
+  for (const tag of tagRows) {
+    const list = tagsByMemo.get(tag.memoId) ?? []
+    list.push(tag)
+    tagsByMemo.set(tag.memoId, list)
+  }
+  return new Map(
+    rows.map((memo) => [
+      memo.id,
+      toMemoWithTags(
+        memo,
+        tagsByMemo.get(memo.id) ?? [],
+        countsMap.get(memo.id),
+        viewerMap.get(memo.id),
+      ),
+    ]),
+  )
+}
+
 export async function getMemoForUser(
   userId: string,
   id: string,
 ): Promise<MemoWithTags> {
-  const memo = await db.query.memos.findFirst({
-    where: and(
-      eq(memos.id, id),
-      eq(memos.userId, userId),
-      isNull(memos.deletedAt),
-    ),
-  })
+  const memo = (await loadMemosForUserByIds(userId, [id])).get(id)
   if (!memo) throw new Error('memo not found')
-  const [tagRows, countsMap, viewerMap] = await Promise.all([
-    loadMemoTags([memo.id]),
-    loadMemoCounts([memo.id]),
-    loadViewerStates([memo.id], userId),
-  ])
-  return toMemoWithTags(
-    memo,
-    tagRows,
-    countsMap.get(memo.id),
-    viewerMap.get(memo.id),
-  )
+  return memo
 }
 
 export interface MemoConnections {
@@ -616,7 +632,15 @@ export async function getMemoConnectionsForUser(
   userId: string,
   memoId: string,
 ): Promise<MemoConnections> {
-  await getMemoForUser(userId, memoId)
+  const memo = await db.query.memos.findFirst({
+    where: and(
+      eq(memos.id, memoId),
+      eq(memos.userId, userId),
+      isNull(memos.deletedAt),
+    ),
+    columns: { id: true },
+  })
+  if (!memo) throw new Error('memo not found')
   const [outgoingRows, backlinkRows, tagRows] = await Promise.all([
     db
       .select({ id: memoLinks.targetId })
@@ -657,16 +681,24 @@ export async function getMemoConnectionsForUser(
           .orderBy(desc(count(memoTags.tagId)), desc(memos.createdAt))
           .limit(8)
 
-  async function load(ids: string[]): Promise<MemoWithTags[]> {
-    return Promise.all(ids.map((id) => getMemoForUser(userId, id)))
-  }
-
-  const [outgoing, backlinks, related] = await Promise.all([
-    load(outgoingRows.map((row) => row.id)),
-    load(backlinkRows.map((row) => row.id)),
-    load(relatedRows.map((row) => row.id)),
+  const outgoingIds = outgoingRows.map((row) => row.id)
+  const backlinkIds = backlinkRows.map((row) => row.id)
+  const relatedIds = relatedRows.map((row) => row.id)
+  const memoById = await loadMemosForUserByIds(userId, [
+    ...outgoingIds,
+    ...backlinkIds,
+    ...relatedIds,
   ])
-  return { outgoing, backlinks, related }
+  function pick(ids: string[]): MemoWithTags[] {
+    return ids
+      .map((id) => memoById.get(id))
+      .filter((item): item is MemoWithTags => Boolean(item))
+  }
+  return {
+    outgoing: pick(outgoingIds),
+    backlinks: pick(backlinkIds),
+    related: pick(relatedIds),
+  }
 }
 
 export type ReviewMode = 'random' | 'on-this-day' | 'least-reviewed'
@@ -1129,32 +1161,6 @@ export async function importMemosForUser(
 }
 
 // ── stats ────────────────────────────────────────────────
-// 随机抽 n 条历史 memo（每日回顾）
-export async function getRandomMemosForUser(
-  userId: string,
-  n = 8,
-): Promise<MemoWithTags[]> {
-  const rows = await db
-    .select()
-    .from(memos)
-    .where(
-      and(
-        eq(memos.userId, userId),
-        eq(memos.archived, false),
-        isNull(memos.deletedAt),
-      ),
-    )
-    .orderBy(sql`random()`)
-    .limit(n)
-  const tagRows = await loadMemoTags(rows.map((m) => m.id))
-  return rows.map((m) =>
-    toMemoWithTags(
-      m,
-      tagRows.filter((tag) => tag.memoId === m.id),
-    ),
-  )
-}
-
 function localDayKey(ms: number, tzOffsetMinutes: number): string {
   const d = new Date(ms - tzOffsetMinutes * 60_000)
   const mm = String(d.getUTCMonth() + 1).padStart(2, '0')

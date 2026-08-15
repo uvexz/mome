@@ -1,0 +1,1 @@
+CREATE INDEX `memos_public_timeline_idx` ON `memos` (`visibility`,`archived`,`deleted_at`,`global_pinned`,`created_at`,`id`);

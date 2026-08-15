@@ -64,8 +64,8 @@ export async function getPublicProfileByUsername(
         isNull(memos.deletedAt),
       ),
     )
-  const repostRows = await db
-    .select({ id: memoReposts.memoId })
+  const [{ reposts: repostCount }] = await db
+    .select({ reposts: count() })
     .from(memoReposts)
     .innerJoin(memos, eq(memos.id, memoReposts.memoId))
     .where(
@@ -85,7 +85,7 @@ export async function getPublicProfileByUsername(
     createdAt: u.createdAt.toISOString(),
     stats: {
       memos: memoCount,
-      reposts: repostRows.length,
+      reposts: repostCount,
     },
   }
 }

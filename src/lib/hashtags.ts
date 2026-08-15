@@ -35,13 +35,6 @@ export function tagPathToSegments(path: string): string[] {
 }
 
 /**
- * 组合成完整路径：`['工作', '会议']` → `'工作/会议'`
- */
-export function segmentsToTagPath(segments: string[]): string {
-  return segments.join('/')
-}
-
-/**
  * 是否为合法标签名（单个片段）。
  */
 export function isValidTagName(name: string): boolean {

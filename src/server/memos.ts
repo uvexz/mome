@@ -8,14 +8,12 @@ import {
   createMemoForUser,
   deleteMemoForUser,
   exportMemosForUser,
-  getRandomMemosForUser,
   getMemoConnectionsForUser,
   getMemoForUser,
   getReviewMemosForUser,
   getStatsForUser,
   importMemosForUser,
   listMemoVersionsForUser,
-  listMemosForUser,
   MAX_CONTENT,
   purgeMemoForUser,
   restoreDeletedMemoForUser,
@@ -49,43 +47,6 @@ export const createMemo = createServerFn({ method: 'POST' })
     createMemoForUser(context.user.id, data.content, {
       visibility: data.visibility,
       clientId: data.clientId,
-    }),
-  )
-
-export const listMemos = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
-  .validator(
-    z.object({
-      cursor: z.string().max(256).optional(),
-      limit: z.number().int().min(1).max(50).default(20),
-      tag: z.string().optional(),
-      q: z.string().max(200).optional(),
-      filter: z.enum(['all', 'archived', 'deleted']).optional(),
-      visibility: z.enum(['public', 'private']).optional(),
-      favorited: z.boolean().optional(),
-      from: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .optional(),
-      to: z
-        .string()
-        .regex(/^\d{4}-\d{2}-\d{2}$/)
-        .optional(),
-      tzOffsetMinutes: z.number().int().min(-840).max(840).optional(),
-    }),
-  )
-  .handler(async ({ data, context }) =>
-    listMemosForUser(context.user.id, {
-      cursor: data.cursor,
-      limit: data.limit,
-      tag: data.tag,
-      q: data.q,
-      filter: data.filter,
-      visibility: data.visibility,
-      favorited: data.favorited,
-      from: data.from,
-      to: data.to,
-      tzOffsetMinutes: data.tzOffsetMinutes,
     }),
   )
 
@@ -248,13 +209,6 @@ export const getContributionGraph = createServerFn({ method: 'GET' })
       month: data.month,
       tzOffsetMinutes: data.tzOffsetMinutes,
     }),
-  )
-
-export const getRandomMemos = createServerFn({ method: 'GET' })
-  .middleware([authMiddleware])
-  .validator(z.object({ n: z.number().int().min(1).max(20).default(8) }))
-  .handler(async ({ data, context }) =>
-    getRandomMemosForUser(context.user.id, data.n),
   )
 
 export const getMemoDetail = createServerFn({ method: 'GET' })

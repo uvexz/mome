@@ -14,6 +14,7 @@ import { toggleGlobalPinForAdmin } from './memos-core'
 import { getSessionUserFromRequest } from './session-core'
 import {
   hasAnyAdmin,
+  invalidateSettingsCache,
   isAdminUser,
   loadEmailSettings,
   loadSiteSettings,
@@ -276,6 +277,7 @@ export const saveSiteSettings = createServerFn({ method: 'POST' })
     ]
 
     await Promise.all(entries.map(([key, value]) => setSetting(key, value)))
+    invalidateSettingsCache()
     return { success: true }
   })
 

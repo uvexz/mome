@@ -1,6 +1,6 @@
 /**
  * 迁移脚本（纯 ESM，仅依赖生产依赖 @libsql/client / drizzle-orm）。
- * 本地：tsx --env-file=.env.local scripts/migrate.mjs
+ * 本地：bun --env-file=.env.local scripts/migrate.mjs
  * Docker：镜像启动时自动执行。
  */
 import { createClient } from '@libsql/client'

@@ -8,12 +8,6 @@ export function isSameDay(a: Date, b: Date): boolean {
   )
 }
 
-export function startOfDay(d: Date): Date {
-  const x = new Date(d)
-  x.setHours(0, 0, 0, 0)
-  return x
-}
-
 /** 分组标签：今天 / 昨天 / 3 月 5 日 / 2024 年 3 月 5 日 */
 export function dayLabel(d: Date, now: Date = new Date()): string {
   if (isSameDay(d, now)) return '今天'
@@ -37,9 +31,4 @@ export function relativeTime(iso: string, now: Date = new Date()): string {
   if (hours < 24 && isSameDay(d, now)) return `${hours} 小时前`
   if (isSameDay(d, new Date(now.getTime() - 86_400_000))) return '昨天'
   return `${d.getMonth() + 1}月${d.getDate()}日`
-}
-
-/** 时钟时间：HH:mm */
-export function clockTime(d: Date): string {
-  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 }

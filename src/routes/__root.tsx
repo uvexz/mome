@@ -49,23 +49,26 @@ export const Route = createRootRoute({
 })
 
 function RootComponent() {
-  const router = useRouter()
-
   return (
     <>
       <Outlet />
-      <TanStackDevtools
-        config={{
-          position: 'bottom-right',
-        }}
-        plugins={[
-          {
-            name: 'Tanstack Router',
-            render: <TanStackRouterDevtoolsPanel router={router} />,
-          },
-        ]}
-      />
+      {import.meta.env.DEV && <DeveloperTools />}
     </>
+  )
+}
+
+function DeveloperTools() {
+  const router = useRouter()
+  return (
+    <TanStackDevtools
+      config={{ position: 'bottom-right' }}
+      plugins={[
+        {
+          name: 'Tanstack Router',
+          render: <TanStackRouterDevtoolsPanel router={router} />,
+        },
+      ]}
+    />
   )
 }
 

@@ -149,11 +149,40 @@ describe('memo core', () => {
     )
   })
 
+  test('keeps page tags scoped and loads memo connections', async () => {
+    const target = await core.createMemoForUser(
+      OWNER_ID,
+      'target #batch-target',
+    )
+    const source = await core.createMemoForUser(
+      OWNER_ID,
+      `source #batch-source [[memo:${target.id}]]`,
+    )
+
+    const listed = await core.listMemosForUser(OWNER_ID, { limit: 50 })
+    expect(listed.items.find((item) => item.id === target.id)?.tags).toEqual([
+      expect.objectContaining({ name: 'batch-target' }),
+    ])
+    expect(listed.items.find((item) => item.id === source.id)?.tags).toEqual([
+      expect.objectContaining({ name: 'batch-source' }),
+    ])
+
+    const connections = await core.getMemoConnectionsForUser(
+      OWNER_ID,
+      source.id,
+    )
+    expect(connections.outgoing.map((item) => item.id)).toContain(target.id)
+  })
+
   test('creates and removes inbound like notifications', async () => {
     const memo = await core.createMemoForUser(OWNER_ID, 'public notification', {
       visibility: 'public',
     })
-    await interactions.toggleLikeForUser(ACTOR_ID, memo.id)
+    const liked = await interactions.toggleLikeForUser(ACTOR_ID, memo.id)
+    expect(liked.counts.likes).toBe(1)
+    expect(
+      (await interactions.loadViewerStates([memo.id], ACTOR_ID)).get(memo.id),
+    ).toEqual(expect.objectContaining({ liked: true }))
     const created = await notificationCore.listNotificationsForUser(OWNER_ID)
     expect(created.items.some((item) => item.memo.id === memo.id)).toBe(true)
     expect(
@@ -166,7 +195,8 @@ describe('memo core', () => {
     ).toBe(0)
     await core.restoreDeletedMemoForUser(OWNER_ID, memo.id)
 
-    await interactions.toggleLikeForUser(ACTOR_ID, memo.id)
+    const unliked = await interactions.toggleLikeForUser(ACTOR_ID, memo.id)
+    expect(unliked.counts.likes).toBe(0)
     const removed = await notificationCore.listNotificationsForUser(OWNER_ID)
     expect(removed.items.some((item) => item.memo.id === memo.id)).toBe(false)
   })
