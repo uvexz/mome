@@ -1,11 +1,11 @@
 import {
   createFileRoute,
   redirect,
-  useLoaderData,
   useNavigate,
   useSearch,
 } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import {
   Badge,
   Banner,
@@ -49,10 +49,13 @@ import { Avatar } from '#/components/avatar'
 import { uploadPresignedPost } from '#/lib/upload'
 import { compactNumber } from '#/lib/utils'
 import {
+  adminGateQueryOptions,
+  adminOverviewQueryOptions,
+  queryKeys,
+} from '#/lib/queries'
+import {
   claimAdmin,
   deleteUser,
-  getAdminGate,
-  getAdminOverview,
   saveSiteSettings,
   setUserAdmin,
 } from '#/server/admin'
@@ -83,20 +86,23 @@ export const Route = createFileRoute('/admin')({
     const user = await getSessionUser()
     if (!user) throw redirect({ to: '/login' })
   },
-  loader: async () => {
-    const gate = await getAdminGate()
-    if (!gate.isAdmin) return { gate, overview: null }
-    return { gate, overview: await getAdminOverview() }
+  loader: async ({ context }) => {
+    const gate = await context.queryClient.ensureQueryData(
+      adminGateQueryOptions(),
+    )
+    if (gate.isAdmin) {
+      await context.queryClient.ensureQueryData(adminOverviewQueryOptions())
+    }
   },
   component: AdminPage,
 })
 
 function AdminPage() {
-  const { gate, overview } = useLoaderData({ from: '/admin' })
+  const { data: gate } = useSuspenseQuery(adminGateQueryOptions())
 
   if (!gate.isAdmin && gate.hasAdmin) return <AccessDenied />
   if (!gate.isAdmin) return <ClaimAdminPage gate={gate} />
-  return <AdminDashboard overview={overview!} />
+  return <AdminDashboard />
 }
 
 // ── 非管理员访问 ────────────────────────────────────────
@@ -229,7 +235,8 @@ type Draft = {
   }
 }
 
-function AdminDashboard({ overview }: { overview: AdminOverview }) {
+function AdminDashboard() {
+  const { data: overview } = useSuspenseQuery(adminOverviewQueryOptions())
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
@@ -254,6 +261,7 @@ function AdminLoading() {
 }
 
 function AdminShell({ overview }: { overview: AdminOverview }) {
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const search = useSearch({ from: '/admin' })
   const toast = useKumoToastManager()
@@ -271,7 +279,14 @@ function AdminShell({ overview }: { overview: AdminOverview }) {
   const activeTab: AdminTab = search.tab ?? 'overview'
 
   async function refresh() {
-    const next = await getAdminOverview()
+    const next = await queryClient.fetchQuery({
+      ...adminOverviewQueryOptions(),
+      staleTime: 0,
+    })
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.public,
+      refetchType: 'none',
+    })
     setUsers(next.users)
     setS3Enabled(next.settings.s3.enabled)
     setSmtpConfigured(next.settings.smtp.configured)
@@ -283,6 +298,7 @@ function AdminShell({ overview }: { overview: AdminOverview }) {
     setSaving(true)
     try {
       await saveSiteSettings({ data: toSaveInput(draft) })
+      await queryClient.invalidateQueries({ queryKey: queryKeys.config })
       await refresh()
       toast.add({ title: '设置已保存', variant: 'success' })
     } catch (err) {

@@ -1,24 +1,21 @@
-import {
-  createFileRoute,
-  redirect,
-  useLoaderData,
-  useNavigate,
-} from '@tanstack/react-router'
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Button, Field, Input, SensitiveInput, Text } from '@cloudflare/kumo'
 import { ArrowRight } from '@phosphor-icons/react'
 
 import { authClient } from '#/lib/auth-client'
+import { appConfigQueryOptions } from '#/lib/queries'
 import {
   isValidUsername,
   USERNAME_MAX_LENGTH,
   USERNAME_MIN_LENGTH,
 } from '#/lib/username'
-import { getAppConfig } from '#/server/config'
 import { getSessionUser } from '#/server/session'
 
 export const Route = createFileRoute('/signup')({
-  loader: async () => getAppConfig(),
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(appConfigQueryOptions()),
   beforeLoad: async () => {
     const user = await getSessionUser()
     if (user) throw redirect({ to: '/' })
@@ -28,7 +25,7 @@ export const Route = createFileRoute('/signup')({
 
 function SignupPage() {
   const navigate = useNavigate()
-  const features = useLoaderData({ from: '/signup' })
+  const { data: features } = useSuspenseQuery(appConfigQueryOptions())
   const [step, setStep] = useState<'form' | 'verify'>('form')
   const [name, setName] = useState('')
   const [username, setUsername] = useState('')

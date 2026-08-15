@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   Button,
   Dialog,
@@ -8,6 +9,7 @@ import {
 } from '@cloudflare/kumo'
 import { ArrowBendUpRight, X } from '@phosphor-icons/react'
 
+import { queryKeys } from '#/lib/queries'
 import { toggleRepost, updateRepost } from '#/server/interactions'
 import type { MemoCounts } from '#/server/interactions-core'
 import type { MemoWithTags } from '#/server/memos'
@@ -32,6 +34,7 @@ export function RepostDialog({
   memo,
   onReposted,
 }: RepostDialogProps) {
+  const queryClient = useQueryClient()
   const toast = useKumoToastManager()
   const [content, setContent] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -63,6 +66,13 @@ export function RepostDialog({
               })
         onReposted(res.counts, true, content.trim() || null)
         toast.add({ title: '已转发', variant: 'success' })
+      }
+      for (const queryKey of [
+        queryKeys.memos,
+        queryKeys.public,
+        queryKeys.interactions,
+      ]) {
+        void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
       }
       onOpenChange(false)
     } catch (err) {

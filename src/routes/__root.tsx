@@ -3,15 +3,19 @@ import {
   Link,
   Outlet,
   Scripts,
-  createRootRoute,
+  createRootRouteWithContext,
   useRouter,
 } from '@tanstack/react-router'
+import { useEffect, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import type { ErrorComponentProps } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
 import { TanStackDevtools } from '@tanstack/react-devtools'
 import { Button, LinkButton, Toasty } from '@cloudflare/kumo'
 
-import { getAppConfig } from '#/server/config'
+import { authClient } from '#/lib/auth-client'
+import type { RouterContext } from '#/lib/query-client'
+import { appConfigQueryOptions } from '#/lib/queries'
 import { ServiceWorkerRegister } from '#/components/service-worker-register'
 
 import '@fontsource-variable/geist'
@@ -20,10 +24,11 @@ import appCss from '../styles.css?url'
 
 // 防 FOUC 主题脚本放在 public/theme-init.js（外联文件，满足生产 CSP script-src 'self'）
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<RouterContext>()({
   errorComponent: RootErrorComponent,
   notFoundComponent: RootNotFoundComponent,
-  loader: async () => getAppConfig(),
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(appConfigQueryOptions()),
   head: ({ loaderData }) => {
     const siteName = loaderData?.siteName ?? 'mome'
     const siteDescription =
@@ -50,11 +55,30 @@ export const Route = createRootRoute({
 
 function RootComponent() {
   return (
-    <>
+    <QuerySessionBoundary>
       <Outlet />
       {import.meta.env.DEV && <DeveloperTools />}
-    </>
+    </QuerySessionBoundary>
   )
+}
+
+function QuerySessionBoundary({ children }: { children: React.ReactNode }) {
+  const queryClient = useQueryClient()
+  const { data: session, isPending } = authClient.useSession()
+  const initialized = useRef(false)
+  const previousUserId = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (isPending) return
+    const userId = session?.user.id ?? null
+    if (initialized.current && previousUserId.current !== userId) {
+      queryClient.clear()
+    }
+    initialized.current = true
+    previousUserId.current = userId
+  }, [isPending, queryClient, session?.user.id])
+
+  return children
 }
 
 function DeveloperTools() {

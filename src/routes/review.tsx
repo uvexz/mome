@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { Button, Loader, Select } from '@cloudflare/kumo'
 import {
   ArrowClockwise,
@@ -10,10 +11,10 @@ import {
 
 import { HashtagText } from '#/components/hashtag-text'
 import { relativeTime } from '#/lib/date'
+import { tagsQueryOptions } from '#/lib/queries'
 import { getReviewMemos } from '#/server/memos'
 import type { MemoWithTags, ReviewMode } from '#/server/memos'
 import { getSessionUser } from '#/server/session'
-import { listTags } from '#/server/tags'
 import type { TagWithCount } from '#/server/tags'
 
 const MODES: Array<{ value: ReviewMode; label: string }> = [
@@ -27,13 +28,15 @@ export const Route = createFileRoute('/review')({
     const user = await getSessionUser()
     if (!user) throw redirect({ to: '/login' })
   },
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(tagsQueryOptions()),
   component: Review,
 })
 
 function Review() {
   const navigate = useNavigate()
   const [items, setItems] = useState<MemoWithTags[] | null>(null)
-  const [tags, setTags] = useState<TagWithCount[]>([])
+  const { data: tags } = useSuspenseQuery(tagsQueryOptions())
   const [mode, setMode] = useState<ReviewMode>('least-reviewed')
   const [tag, setTag] = useState<string | undefined>()
   const [loading, setLoading] = useState(false)
@@ -54,12 +57,6 @@ function Review() {
       setLoading(false)
     }
   }, [mode, tag])
-
-  useEffect(() => {
-    void listTags()
-      .then(setTags)
-      .catch(() => {})
-  }, [])
 
   useEffect(() => {
     void load()

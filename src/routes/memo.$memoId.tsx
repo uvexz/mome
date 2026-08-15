@@ -1,11 +1,10 @@
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import {
-  createFileRoute,
-  redirect,
-  useLoaderData,
-  useNavigate,
-  useRouter,
-} from '@tanstack/react-router'
-import { useEffect, useRef, useState } from 'react'
+  useQuery,
+  useQueryClient,
+  useSuspenseQuery,
+} from '@tanstack/react-query'
 import { Button, Dialog, Loader, useKumoToastManager } from '@cloudflare/kumo'
 import {
   ArrowCounterClockwise,
@@ -18,15 +17,12 @@ import {
 import { HashtagText } from '#/components/hashtag-text'
 import { relativeTime } from '#/lib/date'
 import {
-  getMemoDetail,
-  listMemoVersions,
-  restoreMemoVersion,
-} from '#/server/memos'
-import type {
-  MemoConnections,
-  MemoVersionItem,
-  MemoWithTags,
-} from '#/server/memos'
+  memoDetailQueryOptions,
+  memoVersionsQueryOptions,
+  queryKeys,
+} from '#/lib/queries'
+import { restoreMemoVersion } from '#/server/memos'
+import type { MemoConnections, MemoWithTags } from '#/server/memos'
 import { getSessionUser } from '#/server/session'
 
 export const Route = createFileRoute('/memo/$memoId')({
@@ -34,27 +30,29 @@ export const Route = createFileRoute('/memo/$memoId')({
     const user = await getSessionUser()
     if (!user) throw redirect({ to: '/login' })
   },
-  loader: ({ params }) => getMemoDetail({ data: { id: params.memoId } }),
+  loader: ({ context, params }) =>
+    context.queryClient.ensureQueryData(memoDetailQueryOptions(params.memoId)),
   component: MemoDetailPage,
 })
 
 function MemoDetailPage() {
-  const loaderData = useLoaderData({ from: '/memo/$memoId' })
-  const [memo, setMemo] = useState(loaderData.memo)
+  const { memoId } = Route.useParams()
+  const queryClient = useQueryClient()
+  const { data } = useSuspenseQuery(memoDetailQueryOptions(memoId))
+  const memo = data.memo
   const [historyOpen, setHistoryOpen] = useState(false)
   const navigate = useNavigate()
-  const router = useRouter()
   const toast = useKumoToastManager()
-
-  useEffect(() => setMemo(loaderData.memo), [loaderData.memo])
 
   async function handleRestoreVersion(versionId: string) {
     const restored = await restoreMemoVersion({
       data: { memoId: memo.id, versionId },
     })
-    setMemo(restored)
+    queryClient.setQueryData(memoDetailQueryOptions(memo.id).queryKey, (old) =>
+      old ? { ...old, memo: restored } : old,
+    )
     setHistoryOpen(false)
-    await router.invalidate()
+    await queryClient.invalidateQueries({ queryKey: queryKeys.memos })
     toast.add({ title: '已恢复历史版本', variant: 'success' })
   }
 
@@ -112,16 +110,13 @@ function MemoDetailPage() {
 
         <ConnectionSection
           title="引用的 memo"
-          items={loaderData.connections.outgoing}
+          items={data.connections.outgoing}
         />
         <ConnectionSection
           title="引用了这条"
-          items={loaderData.connections.backlinks}
+          items={data.connections.backlinks}
         />
-        <ConnectionSection
-          title="相关 memo"
-          items={loaderData.connections.related}
-        />
+        <ConnectionSection title="相关 memo" items={data.connections.related} />
       </main>
 
       <VersionHistoryDialog
@@ -146,36 +141,13 @@ function VersionHistoryDialog({
   onRestore: (versionId: string) => Promise<void>
 }) {
   const toast = useKumoToastManager()
-  const toastRef = useRef(toast)
-  toastRef.current = toast
-  const [versions, setVersions] = useState<MemoVersionItem[]>([])
-  const [loading, setLoading] = useState(false)
+  const query = useQuery({
+    ...memoVersionsQueryOptions(memoId),
+    enabled: open,
+  })
+  const versions = query.data ?? []
+  const loading = query.isPending
   const [restoringId, setRestoringId] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (!open) return
-    let active = true
-    setLoading(true)
-    setRestoringId(null)
-    void listMemoVersions({ data: { memoId } })
-      .then((items) => {
-        if (active) setVersions(items)
-      })
-      .catch((error: unknown) => {
-        if (!active) return
-        toastRef.current.add({
-          title: '历史记录加载失败',
-          description: error instanceof Error ? error.message : '请稍后重试',
-          variant: 'error',
-        })
-      })
-      .finally(() => {
-        if (active) setLoading(false)
-      })
-    return () => {
-      active = false
-    }
-  }, [memoId, open])
 
   async function handleRestore(versionId: string) {
     if (restoringId) return

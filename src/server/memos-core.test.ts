@@ -200,4 +200,31 @@ describe('memo core', () => {
     const removed = await notificationCore.listNotificationsForUser(OWNER_ID)
     expect(removed.items.some((item) => item.memo.id === memo.id)).toBe(false)
   })
+
+  test('aggregates every interaction count', async () => {
+    const memo = await core.createMemoForUser(OWNER_ID, 'count interactions', {
+      visibility: 'public',
+    })
+
+    await interactions.toggleLikeForUser(ACTOR_ID, memo.id)
+    await interactions.toggleFavoriteForUser(ACTOR_ID, memo.id)
+    await interactions.toggleRepostForUser(ACTOR_ID, memo.id)
+    const added = await interactions.addCommentForUser(
+      ACTOR_ID,
+      memo.id,
+      'counted comment',
+    )
+
+    const expected = { likes: 1, favorites: 1, comments: 1, reposts: 1 }
+    expect(added.counts).toEqual(expected)
+    expect((await interactions.loadMemoCounts([memo.id])).get(memo.id)).toEqual(
+      expected,
+    )
+
+    const deleted = await interactions.deleteCommentForUser(
+      ACTOR_ID,
+      added.comment.id,
+    )
+    expect(deleted.counts).toEqual({ ...expected, comments: 0 })
+  })
 })

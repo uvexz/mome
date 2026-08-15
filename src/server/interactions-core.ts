@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
+import { and, asc, count, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 
 import { db } from '#/db'
 import {
@@ -56,26 +56,38 @@ export const EMPTY_VIEWER_STATE: ViewerState = {
 export async function loadMemoCounts(
   memoIds: string[],
 ): Promise<Map<string, MemoCounts>> {
-  const map = new Map<string, MemoCounts>()
+  const map = new Map<string, MemoCounts>(
+    memoIds.map((memoId) => [memoId, { ...EMPTY_COUNTS }]),
+  )
   if (memoIds.length === 0) return map
-  const rows = await db
-    .select({
-      memoId: memos.id,
-      likes: sql<number>`(SELECT count(*) FROM ${memoLikes} WHERE ${memoLikes.memoId} = ${memos.id})`,
-      favorites: sql<number>`(SELECT count(*) FROM ${memoFavorites} WHERE ${memoFavorites.memoId} = ${memos.id})`,
-      comments: sql<number>`(SELECT count(*) FROM ${memoComments} WHERE ${memoComments.memoId} = ${memos.id})`,
-      reposts: sql<number>`(SELECT count(*) FROM ${memoReposts} WHERE ${memoReposts.memoId} = ${memos.id})`,
-    })
-    .from(memos)
-    .where(inArray(memos.id, memoIds))
-  for (const row of rows) {
-    map.set(row.memoId, {
-      likes: Number(row.likes),
-      favorites: Number(row.favorites),
-      comments: Number(row.comments),
-      reposts: Number(row.reposts),
-    })
-  }
+  const [likeRows, favoriteRows, commentRows, repostRows] = await Promise.all([
+    db
+      .select({ memoId: memoLikes.memoId, value: count() })
+      .from(memoLikes)
+      .where(inArray(memoLikes.memoId, memoIds))
+      .groupBy(memoLikes.memoId),
+    db
+      .select({ memoId: memoFavorites.memoId, value: count() })
+      .from(memoFavorites)
+      .where(inArray(memoFavorites.memoId, memoIds))
+      .groupBy(memoFavorites.memoId),
+    db
+      .select({ memoId: memoComments.memoId, value: count() })
+      .from(memoComments)
+      .where(inArray(memoComments.memoId, memoIds))
+      .groupBy(memoComments.memoId),
+    db
+      .select({ memoId: memoReposts.memoId, value: count() })
+      .from(memoReposts)
+      .where(inArray(memoReposts.memoId, memoIds))
+      .groupBy(memoReposts.memoId),
+  ])
+  for (const row of likeRows) map.get(row.memoId)!.likes = Number(row.value)
+  for (const row of favoriteRows)
+    map.get(row.memoId)!.favorites = Number(row.value)
+  for (const row of commentRows)
+    map.get(row.memoId)!.comments = Number(row.value)
+  for (const row of repostRows) map.get(row.memoId)!.reposts = Number(row.value)
   return map
 }
 
@@ -286,7 +298,7 @@ export async function addCommentForUser(
   userId: string,
   memoId: string,
   content: string,
-): Promise<CommentItem> {
+): Promise<{ comment: CommentItem; counts: MemoCounts }> {
   await assertInteractionAllowed(userId, memoId)
   const now = new Date()
   const id = ulid()
@@ -317,7 +329,7 @@ export async function addCommentForUser(
     .where(eq(memoComments.id, id))
   if (row.length === 0) throw new Error('comment not found')
   const first = row[0]
-  return {
+  const comment: CommentItem = {
     id: first.id,
     content: first.content,
     createdAt: first.createdAt.toISOString(),
@@ -328,6 +340,8 @@ export async function addCommentForUser(
       image: resolveAvatarUrl(first.authorImage),
     },
   }
+  const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
+  return { comment, counts }
 }
 
 export async function deleteCommentForUser(

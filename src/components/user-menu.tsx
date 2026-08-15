@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, DropdownMenu } from '@cloudflare/kumo'
 import {
   Archive,
@@ -14,29 +14,30 @@ import {
 } from '@phosphor-icons/react'
 
 import { authClient } from '#/lib/auth-client'
-import { getAdminGate } from '#/server/admin'
-import { getUnreadNotificationCount } from '#/server/notifications'
+import {
+  adminGateQueryOptions,
+  queryKeys,
+  unreadNotificationsQueryOptions,
+} from '#/lib/queries'
 
 import { Avatar } from './avatar'
 
 /** 顶栏 / 公共主页共用的用户菜单 */
 export function UserMenu() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const { data: session } = authClient.useSession()
-  const [showAdmin, setShowAdmin] = useState(false)
-  const [unread, setUnread] = useState(0)
   const user = session?.user
-  useEffect(() => {
-    void getAdminGate()
-      .then((gate) => setShowAdmin(gate.isAdmin || !gate.hasAdmin))
-      .catch(() => {})
-  }, [])
-  useEffect(() => {
-    if (!user) return
-    void getUnreadNotificationCount()
-      .then((result) => setUnread(result.count))
-      .catch(() => {})
-  }, [user])
+  const { data: gate } = useQuery({
+    ...adminGateQueryOptions(),
+    enabled: Boolean(user),
+  })
+  const { data: unreadResult } = useQuery({
+    ...unreadNotificationsQueryOptions(),
+    enabled: Boolean(user),
+  })
+  const showAdmin = Boolean(gate && (gate.isAdmin || !gate.hasAdmin))
+  const unread = unreadResult?.count ?? 0
   if (!user) return null
 
   async function handleSignOut() {
@@ -128,7 +129,10 @@ export function UserMenu() {
                 <DropdownMenu.Item
                   icon={<Bell size={15} />}
                   onClick={() => {
-                    setUnread(0)
+                    queryClient.setQueryData(
+                      [...queryKeys.notifications, 'unread'],
+                      { count: 0 },
+                    )
                     void navigate({ to: '/notifications' })
                   }}
                 >

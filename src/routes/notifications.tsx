@@ -1,18 +1,15 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect } from 'react'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Loader } from '@cloudflare/kumo'
 import { ArrowLeft, Bell } from '@phosphor-icons/react'
 
 import { Avatar } from '#/components/avatar'
 import { relativeTime } from '#/lib/date'
-import {
-  listNotifications,
-  markNotificationsRead,
-} from '#/server/notifications'
+import { notificationsQueryOptions, queryKeys } from '#/lib/queries'
+import { markNotificationsRead } from '#/server/notifications'
 import type { NotificationItem } from '#/server/notifications'
 import { getSessionUser } from '#/server/session'
-
-const PAGE_SIZE = 20
 
 const ACTION_LABEL: Record<NotificationItem['type'], string> = {
   like: '赞了你的 memo',
@@ -25,45 +22,23 @@ export const Route = createFileRoute('/notifications')({
     const user = await getSessionUser()
     if (!user) throw redirect({ to: '/login' })
   },
+  loader: ({ context }) =>
+    context.queryClient.ensureInfiniteQueryData(notificationsQueryOptions()),
   component: NotificationsPage,
 })
 
 function NotificationsPage() {
   const navigate = useNavigate()
-  const [items, setItems] = useState<NotificationItem[]>([])
-  const [cursor, setCursor] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
-  const cursorRef = useRef<string | null>(null)
-  const loadingRef = useRef(false)
-
-  const load = useCallback(async (next: boolean) => {
-    if (loadingRef.current) return
-    loadingRef.current = true
-    setLoading(true)
-    try {
-      const result = await listNotifications({
-        data: {
-          cursor: next ? (cursorRef.current ?? undefined) : undefined,
-          limit: PAGE_SIZE,
-        },
-      })
-      setItems((current) =>
-        next ? [...current, ...result.items] : result.items,
-      )
-      cursorRef.current = result.nextCursor
-      setCursor(result.nextCursor)
-      if (!next) {
-        await markNotificationsRead({ data: { all: true } })
-      }
-    } finally {
-      loadingRef.current = false
-      setLoading(false)
-    }
-  }, [])
+  const queryClient = useQueryClient()
+  const query = useInfiniteQuery(notificationsQueryOptions())
+  const items = query.data?.pages.flatMap((page) => page.items) ?? []
 
   useEffect(() => {
-    void load(false)
-  }, [load])
+    queryClient.setQueryData([...queryKeys.notifications, 'unread'], {
+      count: 0,
+    })
+    void markNotificationsRead({ data: { all: true } })
+  }, [queryClient])
 
   return (
     <div className="min-h-dvh">
@@ -85,7 +60,7 @@ function NotificationsPage() {
       </header>
 
       <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-6">
-        {loading && items.length === 0 ? (
+        {query.isPending ? (
           <div className="flex justify-center py-16">
             <Loader />
           </div>
@@ -138,13 +113,13 @@ function NotificationsPage() {
           </div>
         )}
 
-        {cursor && (
+        {query.hasNextPage && (
           <div className="mt-6 flex justify-center">
             <Button
               variant="secondary"
               size="sm"
-              loading={loading}
-              onClick={() => void load(true)}
+              loading={query.isFetchingNextPage}
+              onClick={() => void query.fetchNextPage()}
             >
               加载更多
             </Button>

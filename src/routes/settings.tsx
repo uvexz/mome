@@ -1,11 +1,11 @@
 import {
   createFileRoute,
   redirect,
-  useLoaderData,
   useNavigate,
   useSearch,
 } from '@tanstack/react-router'
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { startRegistration } from '@simplewebauthn/browser'
 import {
   Button,
@@ -44,10 +44,16 @@ import { Avatar } from '#/components/avatar'
 import { authClient } from '#/lib/auth-client'
 import { buildCaptureBookmarklet } from '#/lib/bookmarklet'
 import { relativeTime } from '#/lib/date'
+import {
+  apiKeysQueryOptions,
+  appConfigQueryOptions,
+  myProfileQueryOptions,
+  queryKeys,
+} from '#/lib/queries'
 import { uploadPresignedPost } from '#/lib/upload'
-import { createApiKey, listApiKeys, revokeApiKey } from '#/server/api-keys'
+import { createApiKey, revokeApiKey } from '#/server/api-keys'
 import type { ApiKeyItem } from '#/server/api-keys'
-import { getAppConfig } from '#/server/config'
+import type { AppConfig } from '#/server/config'
 import {
   generatePasskeyRegistrationOptionsFn,
   verifyPasskeyRegistrationFn,
@@ -57,9 +63,9 @@ import { exportMemos, importMemos } from '#/server/memos'
 import {
   confirmEmailChange,
   deleteAccount as deleteAccountFn,
-  getMyProfile,
   requestEmailChange,
 } from '#/server/profile'
+import type { getMyProfile } from '#/server/profile'
 import type { PasskeyItem } from '#/server/passkeys-core'
 import { getSessionUser } from '#/server/session'
 import { getUploadUrl } from '#/server/upload'
@@ -92,36 +98,36 @@ export const Route = createFileRoute('/settings')({
     const user = await getSessionUser()
     if (!user) throw redirect({ to: '/login' })
   },
-  loader: async () => {
-    const [profile, config, apiKeys] = await Promise.all([
-      getMyProfile(),
-      getAppConfig(),
-      listApiKeys(),
+  loader: async ({ context }) => {
+    await Promise.all([
+      context.queryClient.ensureQueryData(myProfileQueryOptions()),
+      context.queryClient.ensureQueryData(appConfigQueryOptions()),
+      context.queryClient.ensureQueryData(apiKeysQueryOptions()),
     ])
-    return { profile, config, apiKeys }
   },
   component: SettingsPage,
 })
 
 type ProfileData = Awaited<ReturnType<typeof getMyProfile>>
-type AppConfig = Awaited<ReturnType<typeof getAppConfig>>
 
 function SettingsPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const search = useSearch({ from: '/settings' })
-  const {
-    profile: loaderProfile,
-    config,
-    apiKeys: loaderApiKeys,
-  } = useLoaderData({ from: '/settings' })
-  const [profile, setProfile] = useState<ProfileData>(loaderProfile)
-  const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>(loaderApiKeys)
+  const { data: profile } = useSuspenseQuery(myProfileQueryOptions())
+  const { data: config } = useSuspenseQuery(appConfigQueryOptions())
+  const { data: apiKeys } = useSuspenseQuery(apiKeysQueryOptions())
   const { refetch: refetchSession } = authClient.useSession()
   const activeTab: SettingsTab = search.tab ?? 'general'
 
   const refresh = async () => {
-    const p = await getMyProfile()
-    setProfile(p)
+    await queryClient.invalidateQueries({
+      queryKey: myProfileQueryOptions().queryKey,
+    })
+    await queryClient.invalidateQueries({
+      queryKey: queryKeys.public,
+      refetchType: 'none',
+    })
     await refetchSession()
   }
 
@@ -141,7 +147,9 @@ function SettingsPage() {
         profile={profile}
         config={config}
         apiKeys={apiKeys}
-        onApiKeysChange={setApiKeys}
+        onApiKeysChange={(keys) =>
+          queryClient.setQueryData(apiKeysQueryOptions().queryKey, keys)
+        }
         refresh={refresh}
       />
     </SettingsDashboard>
@@ -1542,6 +1550,7 @@ async function downloadMemosExport(): Promise<number> {
 }
 
 function DataSection() {
+  const queryClient = useQueryClient()
   const toast = useKumoToastManager()
   const fileRef = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
@@ -1571,6 +1580,14 @@ function DataSection() {
           : null
       if (!memos) throw new Error('JSON 格式不正确')
       const res = await importMemos({ data: { memos } })
+      for (const queryKey of [
+        queryKeys.memos,
+        queryKeys.tags,
+        queryKeys.stats,
+        queryKeys.contribution,
+      ]) {
+        void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
+      }
       toast.add({
         title: `导入完成：新增 ${res.imported} 条，跳过 ${res.skipped} 条`,
         variant: 'success',

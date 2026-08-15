@@ -1,17 +1,14 @@
-import {
-  createFileRoute,
-  redirect,
-  useLoaderData,
-  useNavigate,
-} from '@tanstack/react-router'
+import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
+import { useSuspenseQuery } from '@tanstack/react-query'
 import { Text } from '@cloudflare/kumo'
 
 import { LoginTabs } from '#/components/login-forms'
-import { getAppConfig } from '#/server/config'
+import { appConfigQueryOptions } from '#/lib/queries'
 import { getSessionUser } from '#/server/session'
 
 export const Route = createFileRoute('/login')({
-  loader: async () => getAppConfig(),
+  loader: ({ context }) =>
+    context.queryClient.ensureQueryData(appConfigQueryOptions()),
   beforeLoad: async () => {
     const user = await getSessionUser()
     if (user) throw redirect({ to: '/' })
@@ -21,7 +18,7 @@ export const Route = createFileRoute('/login')({
 
 function LoginPage() {
   const navigate = useNavigate()
-  const config = useLoaderData({ from: '/login' })
+  const { data: config } = useSuspenseQuery(appConfigQueryOptions())
 
   return (
     <div className="flex min-h-dvh flex-col items-center justify-center px-6 py-12">

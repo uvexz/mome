@@ -1,10 +1,10 @@
+import { createFileRoute, notFound, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import {
-  createFileRoute,
-  notFound,
-  useLoaderData,
-  useNavigate,
-} from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+  useQueryClient,
+  useSuspenseInfiniteQuery,
+  useSuspenseQuery,
+} from '@tanstack/react-query'
 import {
   Button,
   InputArea,
@@ -26,77 +26,68 @@ import { HashtagText } from '#/components/hashtag-text'
 import { MemoInteractions } from '#/components/memo-interactions'
 import { RepostDialog } from '#/components/repost-dialog'
 import {
+  commentsQueryOptions,
+  mapInfiniteItems,
+  publicMemoQueryOptions,
+  queryKeys,
+} from '#/lib/queries'
+import {
   addComment,
   deleteComment,
-  listComments,
   toggleFavorite,
   toggleLike,
 } from '#/server/interactions'
 import type { CommentItem, MemoCounts } from '#/server/interactions-core'
-import { getPublicMemo } from '#/server/public'
 import type { MemoWithTags } from '#/server/memos'
 
 export const Route = createFileRoute('/@{$username}/$memoId')({
-  loader: async ({ params }) => {
-    const detail = await getPublicMemo({
-      data: { username: params.username, memoId: params.memoId },
-    })
+  loader: async ({ context, params }) => {
+    const username = params.username.toLowerCase()
+    const detail = await context.queryClient.ensureQueryData(
+      publicMemoQueryOptions(username, params.memoId),
+    )
     if (!detail) throw notFound()
-    return detail
+    await context.queryClient.ensureInfiniteQueryData(
+      commentsQueryOptions(params.memoId),
+    )
   },
   component: MemoPage,
 })
 
 function MemoPage() {
-  const detail = useLoaderData({ from: '/@{$username}/$memoId' })
+  const params = Route.useParams()
+  const detailOptions = publicMemoQueryOptions(
+    params.username.toLowerCase(),
+    params.memoId,
+  )
+  const { data: loadedDetail } = useSuspenseQuery(detailOptions)
+  const detail = loadedDetail!
+  const commentsOptions = commentsQueryOptions(params.memoId)
+  const commentsQuery = useSuspenseInfiniteQuery(commentsOptions)
+  const comments = commentsQuery.data.pages.flatMap((page) => page.items)
+  const queryClient = useQueryClient()
   const navigate = useNavigate()
   const toast = useKumoToastManager()
   const { data: session } = authClient.useSession()
-  const [memo, setMemo] = useState<MemoWithTags>(detail.memo)
-  const [comments, setComments] = useState<CommentItem[]>([])
-  const [cursor, setCursor] = useState<string | null>(null)
-  const [hasMore, setHasMore] = useState(false)
-  const [loadingComments, setLoadingComments] = useState(true)
+  const memo = detail.memo
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [repostOpen, setRepostOpen] = useState(false)
-  const reqIdRef = useRef(0)
+  function patchMemo(patch: Partial<MemoWithTags>) {
+    queryClient.setQueryData(detailOptions.queryKey, (current) =>
+      current ? { ...current, memo: { ...current.memo, ...patch } } : current,
+    )
+  }
 
-  const loadComments = useCallback(
-    async (page: 'first' | 'next') => {
-      const id = ++reqIdRef.current
-      setLoadingComments(true)
-      try {
-        const res = await listComments({
-          data: {
-            memoId: memo.id,
-            cursor:
-              page === 'next' ? (cursorRef.current ?? undefined) : undefined,
-            limit: 20,
-          },
-        })
-        if (id !== reqIdRef.current) return
-        setComments((prev) =>
-          page === 'first' ? res.items : [...prev, ...res.items],
-        )
-        setCursor(res.nextCursor)
-        setHasMore(res.nextCursor !== null)
-      } catch {
-        if (id === reqIdRef.current) {
-          toast.add({ title: '评论加载失败', variant: 'error' })
-        }
-      } finally {
-        if (id === reqIdRef.current) setLoadingComments(false)
-      }
-    },
-    [memo.id],
-  )
-  const cursorRef = useRef(cursor)
-  cursorRef.current = cursor
-
-  useEffect(() => {
-    void loadComments('first')
-  }, [memo.id])
+  function markRelatedQueriesStale() {
+    for (const queryKey of [
+      queryKeys.memos,
+      queryKeys.public,
+      queryKeys.interactions,
+    ]) {
+      void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
+    }
+  }
 
   function requireLogin(): boolean {
     if (session?.user) return true
@@ -108,11 +99,11 @@ function MemoPage() {
     if (!requireLogin()) return
     try {
       const res = await toggleLike({ data: { memoId: memo.id } })
-      setMemo((m) => ({
-        ...m,
+      patchMemo({
         counts: res.counts,
-        viewerState: { ...m.viewerState, liked: res.liked },
-      }))
+        viewerState: { ...memo.viewerState, liked: res.liked },
+      })
+      markRelatedQueriesStale()
     } catch (err) {
       toast.add({
         title: '点赞失败',
@@ -126,11 +117,11 @@ function MemoPage() {
     if (!requireLogin()) return
     try {
       const res = await toggleFavorite({ data: { memoId: memo.id } })
-      setMemo((m) => ({
-        ...m,
+      patchMemo({
         counts: res.counts,
-        viewerState: { ...m.viewerState, favorited: res.favorited },
-      }))
+        viewerState: { ...memo.viewerState, favorited: res.favorited },
+      })
+      markRelatedQueriesStale()
     } catch (err) {
       toast.add({
         title: '收藏失败',
@@ -150,15 +141,15 @@ function MemoPage() {
     reposted: boolean,
     content: string | null,
   ) {
-    setMemo((m) => ({
-      ...m,
+    patchMemo({
       counts,
       viewerState: {
-        ...m.viewerState,
+        ...memo.viewerState,
         reposted,
         repostedContent: content,
       },
-    }))
+    })
+    markRelatedQueriesStale()
   }
 
   async function handleSendComment() {
@@ -167,13 +158,18 @@ function MemoPage() {
     if (!requireLogin()) return
     setSending(true)
     try {
-      const comment = await addComment({ data: { memoId: memo.id, content } })
-      setComments((prev) => [...prev, comment])
+      const result = await addComment({ data: { memoId: memo.id, content } })
+      queryClient.setQueryData(commentsOptions.queryKey, (data) => {
+        if (!data || data.pages.length === 0) return data
+        const pages = [...data.pages]
+        const index = pages.length - 1
+        const page = pages[index]
+        pages[index] = { ...page, items: [...page.items, result.comment] }
+        return { ...data, pages }
+      })
       setDraft('')
-      setMemo((m) => ({
-        ...m,
-        counts: { ...m.counts, comments: m.counts.comments + 1 },
-      }))
+      patchMemo({ counts: result.counts })
+      markRelatedQueriesStale()
     } catch (err) {
       toast.add({
         title: '评论失败',
@@ -189,11 +185,13 @@ function MemoPage() {
     try {
       const res = await deleteComment({ data: { commentId: comment.id } })
       if (res.deleted) {
-        setComments((prev) => prev.filter((c) => c.id !== comment.id))
-        setMemo((m) => ({
-          ...m,
-          counts: { ...m.counts, comments: Math.max(0, m.counts.comments - 1) },
-        }))
+        queryClient.setQueryData(commentsOptions.queryKey, (data) =>
+          mapInfiniteItems(data, (item) =>
+            item.id === comment.id ? null : item,
+          ),
+        )
+        patchMemo({ counts: res.counts })
+        markRelatedQueriesStale()
       }
     } catch {
       toast.add({ title: '删除失败', variant: 'error' })
@@ -322,11 +320,7 @@ function MemoPage() {
             />
           </div>
 
-          {loadingComments ? (
-            <div className="flex justify-center py-8">
-              <Loader size="sm" />
-            </div>
-          ) : comments.length === 0 ? (
+          {comments.length === 0 ? (
             <p className="py-8 text-center text-sm text-kumo-subtle">
               还没有评论。
             </p>
@@ -373,15 +367,20 @@ function MemoPage() {
               ))}
             </div>
           )}
-          {hasMore && !loadingComments && (
+          {commentsQuery.hasNextPage && !commentsQuery.isFetchingNextPage && (
             <div className="py-4 text-center">
               <Button
                 variant="secondary"
                 size="sm"
-                onClick={() => void loadComments('next')}
+                onClick={() => void commentsQuery.fetchNextPage()}
               >
                 加载更多
               </Button>
+            </div>
+          )}
+          {commentsQuery.isFetchingNextPage && (
+            <div className="flex justify-center py-4">
+              <Loader size="sm" />
             </div>
           )}
         </section>

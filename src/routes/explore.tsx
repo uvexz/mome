@@ -1,10 +1,10 @@
+import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
+import { useState } from 'react'
 import {
-  createFileRoute,
-  useLoaderData,
-  useNavigate,
-  useSearch,
-} from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+  useQueryClient,
+  useSuspenseInfiniteQuery,
+  useSuspenseQuery,
+} from '@tanstack/react-query'
 import { Button, Loader, useKumoToastManager } from '@cloudflare/kumo'
 import { ArrowLeft, GlobeSimple, X } from '@phosphor-icons/react'
 import { z } from 'zod'
@@ -15,88 +15,51 @@ import { MemoCard } from '#/components/memo-card'
 import { MemoCommentsDialog } from '#/components/memo-comments-dialog'
 import { RepostDialog } from '#/components/repost-dialog'
 import { UserMenu } from '#/components/user-menu'
-import { getAdminGate, toggleGlobalPin } from '#/server/admin'
+import {
+  adminGateQueryOptions,
+  appConfigQueryOptions,
+  mapInfiniteItems,
+  publicTimelineQueryOptions,
+  queryKeys,
+} from '#/lib/queries'
+import { toggleGlobalPin } from '#/server/admin'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import type { MemoCounts } from '#/server/interactions-core'
-import { listPublicTimeline } from '#/server/public'
-import type { PublicTimelineItem } from '#/server/public-core'
 import type { MemoWithTags } from '#/server/memos'
-import { getAppConfig } from '#/server/config'
 
 export const Route = createFileRoute('/explore')({
   validateSearch: z.object({
     tag: z.string().max(100).optional(),
   }),
-  loader: async () => getAppConfig(),
+  loaderDeps: ({ search }) => ({ tag: search.tag }),
+  loader: async ({ context, deps }) => {
+    await Promise.all([
+      context.queryClient.ensureQueryData(appConfigQueryOptions()),
+      context.queryClient.ensureQueryData(adminGateQueryOptions()),
+      context.queryClient.ensureInfiniteQueryData(
+        publicTimelineQueryOptions(deps.tag),
+      ),
+    ])
+  },
   component: ExplorePage,
 })
 
 function ExplorePage() {
   const search = useSearch({ from: '/explore' })
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const toast = useKumoToastManager()
-  const config = useLoaderData({ from: '/explore' })
+  const { data: config } = useSuspenseQuery(appConfigQueryOptions())
+  const { data: gate } = useSuspenseQuery(adminGateQueryOptions())
+  const timelineOptions = publicTimelineQueryOptions(search.tag)
+  const timeline = useSuspenseInfiniteQuery(timelineOptions)
+  const items = timeline.data.pages.flatMap((page) => page.items)
   const { data: session } = authClient.useSession()
-  const [items, setItems] = useState<PublicTimelineItem[]>([])
-  const [cursor, setCursor] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
   const [commenting, setCommenting] = useState<MemoWithTags | null>(null)
   const [commentOpen, setCommentOpen] = useState(false)
   const [reposting, setReposting] = useState<MemoWithTags | null>(null)
   const [repostOpen, setRepostOpen] = useState(false)
   const [loginOpen, setLoginOpen] = useState(false)
-  const [isAdmin, setIsAdmin] = useState(false)
-  const reqIdRef = useRef(0)
-  const cursorRef = useRef<string | null>(null)
-
-  const loadInitial = useCallback(async () => {
-    const id = ++reqIdRef.current
-    setLoading(true)
-    try {
-      const [res, adminGate] = await Promise.all([
-        listPublicTimeline({
-          data: { limit: 20, tag: search.tag },
-        }),
-        getAdminGate(),
-      ])
-      if (id !== reqIdRef.current) return
-      setItems(res.items)
-      setIsAdmin(adminGate.isAdmin)
-      cursorRef.current = res.nextCursor
-      setCursor(res.nextCursor)
-    } catch {
-      if (id === reqIdRef.current) {
-        toast.add({ title: '加载失败', variant: 'error' })
-      }
-    } finally {
-      if (id === reqIdRef.current) setLoading(false)
-    }
-  }, [search.tag])
-
-  useEffect(() => {
-    void loadInitial()
-  }, [loadInitial])
-
-  async function loadMore() {
-    if (loading || !cursorRef.current) return
-    const id = ++reqIdRef.current
-    setLoading(true)
-    try {
-      const res = await listPublicTimeline({
-        data: { cursor: cursorRef.current, limit: 20, tag: search.tag },
-      })
-      if (id !== reqIdRef.current) return
-      setItems((prev) => [...prev, ...res.items])
-      cursorRef.current = res.nextCursor
-      setCursor(res.nextCursor)
-    } catch {
-      if (id === reqIdRef.current) {
-        toast.add({ title: '加载更多失败', variant: 'error' })
-      }
-    } finally {
-      if (id === reqIdRef.current) setLoading(false)
-    }
-  }
 
   function updateTag(tag?: string) {
     void navigate({
@@ -113,17 +76,29 @@ function ExplorePage() {
   }
 
   function patchItem(id: string, patch: Partial<MemoWithTags>) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === id ? { ...i, memo: { ...i.memo, ...patch } } : i,
+    queryClient.setQueryData(timelineOptions.queryKey, (data) =>
+      mapInfiniteItems(data, (item) =>
+        item.memo.id === id
+          ? { ...item, memo: { ...item.memo, ...patch } }
+          : item,
       ),
     )
+  }
+
+  function markRelatedQueriesStale() {
+    for (const queryKey of [
+      queryKeys.memos,
+      queryKeys.public,
+      queryKeys.interactions,
+    ]) {
+      void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
+    }
   }
 
   async function handleToggleGlobalPin(memo: MemoWithTags) {
     try {
       const res = await toggleGlobalPin({ data: { memoId: memo.id } })
-      await loadInitial()
+      await queryClient.invalidateQueries({ queryKey: queryKeys.public })
       toast.add({
         title: res.globalPinned ? '已全局置顶' : '已取消全局置顶',
         variant: 'success',
@@ -145,6 +120,7 @@ function ExplorePage() {
         counts: res.counts,
         viewerState: { ...memo.viewerState, liked: res.liked },
       })
+      markRelatedQueriesStale()
     } catch (err) {
       toast.add({
         title: '点赞失败',
@@ -162,6 +138,7 @@ function ExplorePage() {
         counts: res.counts,
         viewerState: { ...memo.viewerState, favorited: res.favorited },
       })
+      markRelatedQueriesStale()
     } catch (err) {
       toast.add({
         title: '收藏失败',
@@ -189,24 +166,14 @@ function ExplorePage() {
     reposted: boolean,
     content: string | null,
   ) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === memo.id
-          ? {
-              ...i,
-              memo: {
-                ...i.memo,
-                counts,
-                viewerState: {
-                  ...i.memo.viewerState,
-                  reposted,
-                  repostedContent: content,
-                },
-              },
-            }
-          : i,
-      ),
-    )
+    patchItem(memo.id, {
+      counts,
+      viewerState: {
+        ...memo.viewerState,
+        reposted,
+        repostedContent: content,
+      },
+    })
   }
 
   return (
@@ -303,11 +270,7 @@ function ExplorePage() {
           </div>
         )}
 
-        {loading && items.length === 0 ? (
-          <div className="flex justify-center py-16">
-            <Loader size="base" />
-          </div>
-        ) : items.length === 0 ? (
+        {items.length === 0 ? (
           <p className="py-16 text-center text-sm text-kumo-subtle">
             {search.tag
               ? `#${search.tag} 下还没有公开 memo`
@@ -325,7 +288,9 @@ function ExplorePage() {
                 hideVisibility
                 showUserPin={false}
                 onToggleGlobalPin={
-                  isAdmin ? (m) => void handleToggleGlobalPin(m) : undefined
+                  gate.isAdmin
+                    ? (m) => void handleToggleGlobalPin(m)
+                    : undefined
                 }
                 onTagClick={(tag) => updateTag(tag)}
                 onLike={(m) => void handleLike(m)}
@@ -337,14 +302,17 @@ function ExplorePage() {
           </div>
         )}
 
-        {cursor && !loading && (
+        {timeline.hasNextPage && !timeline.isFetchingNextPage && (
           <div className="py-6 text-center">
-            <Button variant="secondary" onClick={() => void loadMore()}>
+            <Button
+              variant="secondary"
+              onClick={() => void timeline.fetchNextPage()}
+            >
               加载更多
             </Button>
           </div>
         )}
-        {loading && items.length > 0 && (
+        {timeline.isFetchingNextPage && (
           <div className="flex justify-center py-6">
             <Loader size="sm" />
           </div>
@@ -355,21 +323,8 @@ function ExplorePage() {
         open={commentOpen}
         onOpenChange={setCommentOpen}
         memo={commenting}
-        onCountChange={(count) =>
-          commenting &&
-          setItems((prev) =>
-            prev.map((i) =>
-              i.memo.id === commenting.id
-                ? {
-                    ...i,
-                    memo: {
-                      ...i.memo,
-                      counts: { ...i.memo.counts, comments: count },
-                    },
-                  }
-                : i,
-            ),
-          )
+        onCountsChange={(counts) =>
+          commenting && patchItem(commenting.id, { counts })
         }
       />
       <RepostDialog

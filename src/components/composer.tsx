@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useQueryClient, useSuspenseQuery } from '@tanstack/react-query'
 import { Button, InputArea } from '@cloudflare/kumo'
 import {
   ArrowUpRight,
@@ -9,6 +10,7 @@ import {
 
 import { cn } from '#/lib/utils'
 import { authClient } from '#/lib/auth-client'
+import { appConfigQueryOptions, queryKeys } from '#/lib/queries'
 import {
   clearComposerDraft,
   enqueueMemo,
@@ -18,7 +20,6 @@ import {
   saveComposerDraft,
 } from '#/lib/composer-storage'
 import { assertImageSignature, uploadPresignedPost } from '#/lib/upload'
-import { getAppConfig } from '#/server/config'
 import { createMemo } from '#/server/memos'
 import type { MemoWithTags } from '#/server/memos'
 import { getUploadUrl } from '#/server/upload'
@@ -48,12 +49,13 @@ export function Composer({
   initialVisibility,
   draftScope = 'home',
 }: ComposerProps) {
+  const queryClient = useQueryClient()
+  const { data: config } = useSuspenseQuery(appConfigQueryOptions())
   const { data: session } = authClient.useSession()
   const [content, setContent] = useState('')
   const [visibility, setVisibility] = useState<'public' | 'private'>('private')
   const [submitting, setSubmitting] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [s3Enabled, setS3Enabled] = useState(false)
   const [draftStatus, setDraftStatus] = useState<
     'idle' | 'saving' | 'saved' | 'queued'
   >('idle')
@@ -74,27 +76,28 @@ export function Composer({
     draftKeyRef.current = key
     let cancelled = false
 
-    void Promise.all([
-      getAppConfig().catch(() => null),
-      loadComposerDraft(key).catch(() => null),
-    ]).then(([config, draft]) => {
-      if (cancelled) return
-      setS3Enabled(config?.s3Enabled ?? false)
-      setContent(initialContent.trim() || draft?.content || '')
-      setVisibility(
-        initialVisibility ??
-          draft?.visibility ??
-          config?.defaultVisibility ??
-          'private',
-      )
-      initializedRef.current = true
-      if (draft?.content && !initialContent.trim()) setDraftStatus('saved')
-    })
+    void loadComposerDraft(key)
+      .catch(() => null)
+      .then((draft) => {
+        if (cancelled) return
+        setContent(initialContent.trim() || draft?.content || '')
+        setVisibility(
+          initialVisibility ?? draft?.visibility ?? config.defaultVisibility,
+        )
+        initializedRef.current = true
+        if (draft?.content && !initialContent.trim()) setDraftStatus('saved')
+      })
 
     return () => {
       cancelled = true
     }
-  }, [draftScope, initialContent, initialVisibility, session?.user.id])
+  }, [
+    config.defaultVisibility,
+    draftScope,
+    initialContent,
+    initialVisibility,
+    session?.user.id,
+  ])
 
   useEffect(() => {
     const key = draftKeyRef.current
@@ -132,7 +135,13 @@ export function Composer({
               },
             })
             await removeQueuedMemo(item.id)
-            if (!memo.deletedAt) onCreatedRef.current(memo)
+            if (!memo.deletedAt) {
+              void queryClient.invalidateQueries({
+                queryKey: queryKeys.memos,
+                refetchType: 'none',
+              })
+              onCreatedRef.current(memo)
+            }
           } catch (error) {
             if (!isBrowserOnline()) break
             onErrorRef.current(
@@ -149,7 +158,7 @@ export function Composer({
     void flushOutbox()
     window.addEventListener('online', flushOutbox)
     return () => window.removeEventListener('online', flushOutbox)
-  }, [])
+  }, [queryClient])
 
   async function submit() {
     const text = content.trim()
@@ -181,7 +190,13 @@ export function Composer({
       if (draftKeyRef.current) {
         await clearComposerDraft(draftKeyRef.current)
       }
-      if (!memo.deletedAt) onCreated(memo)
+      if (!memo.deletedAt) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.memos,
+          refetchType: 'none',
+        })
+        onCreated(memo)
+      }
     } catch (err) {
       if (!navigator.onLine) {
         await enqueueMemo({
@@ -296,7 +311,7 @@ export function Composer({
               仅自己可见
             </button>
           </div>
-          {s3Enabled && (
+          {config.s3Enabled && (
             <>
               <input
                 ref={fileRef}

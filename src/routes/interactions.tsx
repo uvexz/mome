@@ -1,5 +1,6 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
+import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Loader, useKumoToastManager } from '@cloudflare/kumo'
 import {
   ArrowBendUpRight,
@@ -15,16 +16,15 @@ import { RepostDialog } from '#/components/repost-dialog'
 import { relativeTime } from '#/lib/date'
 import { cn } from '#/lib/utils'
 import {
-  toggleFavorite,
-  toggleLike,
-  listInteractions,
-} from '#/server/interactions'
+  interactionsQueryOptions,
+  mapInfiniteItems,
+  queryKeys,
+} from '#/lib/queries'
+import { toggleFavorite, toggleLike } from '#/server/interactions'
 import type { MemoCounts } from '#/server/interactions-core'
 import type { MemoWithTags } from '#/server/memos'
 import { getSessionUser } from '#/server/session'
-import type { InteractionItem, InteractionKind } from '#/server/timeline-core'
-
-const PAGE_SIZE = 20
+import type { InteractionKind } from '#/server/timeline-core'
 
 const TABS: Array<{
   key: InteractionKind
@@ -68,76 +68,45 @@ export const Route = createFileRoute('/interactions')({
     const user = await getSessionUser()
     if (!user) throw redirect({ to: '/explore' })
   },
+  loader: ({ context }) =>
+    context.queryClient.ensureInfiniteQueryData(
+      interactionsQueryOptions('likes'),
+    ),
   component: InteractionsPage,
 })
 
 function InteractionsPage() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const toast = useKumoToastManager()
   const [tab, setTab] = useState<InteractionKind>('likes')
-  const [items, setItems] = useState<InteractionItem[]>([])
-  const [cursor, setCursor] = useState<string | null>(null)
-  const [loading, setLoading] = useState(true)
+  const options = interactionsQueryOptions(tab)
+  const query = useInfiniteQuery(options)
+  const items = query.data?.pages.flatMap((page) => page.items) ?? []
   const [commenting, setCommenting] = useState<MemoWithTags | null>(null)
   const [commentOpen, setCommentOpen] = useState(false)
   const [reposting, setReposting] = useState<MemoWithTags | null>(null)
   const [repostOpen, setRepostOpen] = useState(false)
-  const reqIdRef = useRef(0)
-  const cursorRef = useRef<string | null>(null)
-  const tabRef = useRef(tab)
-  tabRef.current = tab
-
-  const load = useCallback(async (page: 'first' | 'next') => {
-    const id = ++reqIdRef.current
-    setLoading(true)
-    try {
-      const kind = tabRef.current
-      const res = await listInteractions({
-        data: {
-          kind,
-          cursor:
-            page === 'next' ? (cursorRef.current ?? undefined) : undefined,
-          limit: PAGE_SIZE,
-        },
-      })
-      if (id !== reqIdRef.current) return
-      setItems((prev) =>
-        page === 'first' ? res.items : [...prev, ...res.items],
-      )
-      cursorRef.current = res.nextCursor
-      setCursor(res.nextCursor)
-    } catch {
-      if (id === reqIdRef.current) {
-        toast.add({ title: '加载失败', variant: 'error' })
-      }
-    } finally {
-      if (id === reqIdRef.current) setLoading(false)
-    }
-  }, [])
-
-  useEffect(() => {
-    setItems([])
-    cursorRef.current = null
-    setCursor(null)
-    void load('first')
-  }, [tab, load])
-
   function patchItem(id: string, patch: Partial<MemoWithTags>) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === id ? { ...i, memo: { ...i.memo, ...patch } } : i,
+    queryClient.setQueryData(options.queryKey, (data) =>
+      mapInfiniteItems(data, (item) =>
+        item.memo.id === id
+          ? { ...item, memo: { ...item.memo, ...patch } }
+          : item,
       ),
     )
   }
 
   function removeItem(id: string) {
-    setItems((prev) => prev.filter((i) => i.memo.id !== id))
+    queryClient.setQueryData(options.queryKey, (data) =>
+      mapInfiniteItems(data, (item) => (item.memo.id === id ? null : item)),
+    )
   }
 
   async function handleLike(memo: MemoWithTags) {
     try {
       const res = await toggleLike({ data: { memoId: memo.id } })
-      if (!res.liked && tabRef.current === 'likes') {
+      if (!res.liked && tab === 'likes') {
         removeItem(memo.id)
       } else {
         patchItem(memo.id, {
@@ -145,6 +114,14 @@ function InteractionsPage() {
           viewerState: { ...memo.viewerState, liked: res.liked },
         })
       }
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.memos,
+        refetchType: 'none',
+      })
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.public,
+        refetchType: 'none',
+      })
     } catch (err) {
       toast.add({
         title: '点赞失败',
@@ -157,7 +134,7 @@ function InteractionsPage() {
   async function handleFavorite(memo: MemoWithTags) {
     try {
       const res = await toggleFavorite({ data: { memoId: memo.id } })
-      if (!res.favorited && tabRef.current === 'favorites') {
+      if (!res.favorited && tab === 'favorites') {
         removeItem(memo.id)
       } else {
         patchItem(memo.id, {
@@ -165,6 +142,14 @@ function InteractionsPage() {
           viewerState: { ...memo.viewerState, favorited: res.favorited },
         })
       }
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.memos,
+        refetchType: 'none',
+      })
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.public,
+        refetchType: 'none',
+      })
     } catch (err) {
       toast.add({
         title: '收藏失败',
@@ -180,7 +165,7 @@ function InteractionsPage() {
     reposted: boolean,
     content: string | null,
   ) {
-    if (!reposted && tabRef.current === 'reposts') {
+    if (!reposted && tab === 'reposts') {
       removeItem(memo.id)
       return
     }
@@ -233,7 +218,7 @@ function InteractionsPage() {
         </div>
 
         <section className="mt-6" aria-label={activeTab.label}>
-          {loading && items.length === 0 ? (
+          {query.isPending ? (
             <div className="flex justify-center py-16">
               <Loader size="base" />
             </div>
@@ -285,14 +270,17 @@ function InteractionsPage() {
             </div>
           )}
 
-          {cursor && !loading && (
+          {query.hasNextPage && !query.isFetchingNextPage && (
             <div className="py-6 text-center">
-              <Button variant="secondary" onClick={() => void load('next')}>
+              <Button
+                variant="secondary"
+                onClick={() => void query.fetchNextPage()}
+              >
                 加载更多
               </Button>
             </div>
           )}
-          {loading && items.length > 0 && (
+          {query.isFetchingNextPage && (
             <div className="flex justify-center py-6">
               <Loader size="sm" />
             </div>
@@ -304,21 +292,8 @@ function InteractionsPage() {
         open={commentOpen}
         onOpenChange={setCommentOpen}
         memo={commenting}
-        onCountChange={(count) =>
-          commenting &&
-          setItems((prev) =>
-            prev.map((i) =>
-              i.memo.id === commenting.id
-                ? {
-                    ...i,
-                    memo: {
-                      ...i.memo,
-                      counts: { ...i.memo.counts, comments: count },
-                    },
-                  }
-                : i,
-            ),
-          )
+        onCountsChange={(counts) =>
+          commenting && patchItem(commenting.id, { counts })
         }
       />
       <RepostDialog

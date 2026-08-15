@@ -1,10 +1,10 @@
+import { createFileRoute, notFound, useNavigate } from '@tanstack/react-router'
+import { useState } from 'react'
 import {
-  createFileRoute,
-  notFound,
-  useLoaderData,
-  useNavigate,
-} from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+  useQueryClient,
+  useSuspenseInfiniteQuery,
+  useSuspenseQuery,
+} from '@tanstack/react-query'
 import { Button, Loader, useKumoToastManager } from '@cloudflare/kumo'
 import { ArrowLeft } from '@phosphor-icons/react'
 
@@ -13,75 +13,48 @@ import { Avatar } from '#/components/avatar'
 import { MemoCard } from '#/components/memo-card'
 import { MemoCommentsDialog } from '#/components/memo-comments-dialog'
 import { RepostDialog } from '#/components/repost-dialog'
+import {
+  mapInfiniteItems,
+  publicMemosQueryOptions,
+  publicProfileQueryOptions,
+  queryKeys,
+} from '#/lib/queries'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import type { MemoCounts } from '#/server/interactions-core'
-import { getPublicProfile, listPublicMemos } from '#/server/public'
-import type { PublicFeedItem, PublicProfile } from '#/server/public-core'
+import type { PublicProfile } from '#/server/public-core'
 import type { MemoWithTags } from '#/server/memos'
 
 export const Route = createFileRoute('/@{$username}/')({
-  loader: async ({ params }) => {
-    const profile = await getPublicProfile({
-      data: { username: params.username },
-    })
+  loader: async ({ context, params }) => {
+    const username = params.username.toLowerCase()
+    const profile = await context.queryClient.ensureQueryData(
+      publicProfileQueryOptions(username),
+    )
     if (!profile) throw notFound()
-    return profile
+    await context.queryClient.ensureInfiniteQueryData(
+      publicMemosQueryOptions(profile.username),
+    )
   },
   component: ProfilePage,
 })
 
 function ProfilePage() {
-  const profile = useLoaderData({ from: '/@{$username}/' })
+  const username = Route.useParams().username.toLowerCase()
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const toast = useKumoToastManager()
   const { data: session } = authClient.useSession()
-
-  const [items, setItems] = useState<PublicFeedItem[]>([])
-  const [cursor, setCursor] = useState<string | null>(null)
-  const [hasMore, setHasMore] = useState(false)
-  const [loading, setLoading] = useState(true)
+  const { data: profile } = useSuspenseQuery(
+    publicProfileQueryOptions(username),
+  )
+  const memosOptions = publicMemosQueryOptions(username)
+  const memos = useSuspenseInfiniteQuery(memosOptions)
+  if (!profile) throw notFound()
+  const items = memos.data.pages.flatMap((page) => page.items)
   const [commenting, setCommenting] = useState<MemoWithTags | null>(null)
   const [commentOpen, setCommentOpen] = useState(false)
   const [reposting, setReposting] = useState<MemoWithTags | null>(null)
   const [repostOpen, setRepostOpen] = useState(false)
-  const reqIdRef = useRef(0)
-
-  const load = useCallback(
-    async (page: 'first' | 'next') => {
-      const id = ++reqIdRef.current
-      setLoading(true)
-      try {
-        const res = await listPublicMemos({
-          data: {
-            username: profile.username,
-            cursor:
-              page === 'next' ? (cursorRef.current ?? undefined) : undefined,
-            limit: 20,
-          },
-        })
-        if (id !== reqIdRef.current) return
-        setItems((prev) =>
-          page === 'first' ? res.items : [...prev, ...res.items],
-        )
-        setCursor(res.nextCursor)
-        setHasMore(res.nextCursor !== null)
-      } catch {
-        if (id === reqIdRef.current) {
-          toast.add({ title: '加载失败', variant: 'error' })
-        }
-      } finally {
-        if (id === reqIdRef.current) setLoading(false)
-      }
-    },
-    [profile.username],
-  )
-  const cursorRef = useRef(cursor)
-  cursorRef.current = cursor
-
-  useEffect(() => {
-    void load('first')
-  }, [profile.username])
-
   function requireLogin(): boolean {
     if (session?.user) return true
     void navigate({ to: '/login' })
@@ -89,11 +62,23 @@ function ProfilePage() {
   }
 
   function patchItem(id: string, patch: Partial<MemoWithTags>) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === id ? { ...i, memo: { ...i.memo, ...patch } } : i,
+    queryClient.setQueryData(memosOptions.queryKey, (data) =>
+      mapInfiniteItems(data, (item) =>
+        item.memo.id === id
+          ? { ...item, memo: { ...item.memo, ...patch } }
+          : item,
       ),
     )
+  }
+
+  function markRelatedQueriesStale() {
+    for (const queryKey of [
+      queryKeys.memos,
+      queryKeys.public,
+      queryKeys.interactions,
+    ]) {
+      void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
+    }
   }
 
   async function handleLike(memo: MemoWithTags) {
@@ -104,6 +89,7 @@ function ProfilePage() {
         counts: res.counts,
         viewerState: { ...memo.viewerState, liked: res.liked },
       })
+      markRelatedQueriesStale()
     } catch (err) {
       toast.add({
         title: '点赞失败',
@@ -121,6 +107,7 @@ function ProfilePage() {
         counts: res.counts,
         viewerState: { ...memo.viewerState, favorited: res.favorited },
       })
+      markRelatedQueriesStale()
     } catch (err) {
       toast.add({
         title: '收藏失败',
@@ -148,24 +135,14 @@ function ProfilePage() {
     reposted: boolean,
     content: string | null,
   ) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === memo.id
-          ? {
-              ...i,
-              memo: {
-                ...i.memo,
-                counts,
-                viewerState: {
-                  ...i.memo.viewerState,
-                  reposted,
-                  repostedContent: content,
-                },
-              },
-            }
-          : i,
-      ),
-    )
+    patchItem(memo.id, {
+      counts,
+      viewerState: {
+        ...memo.viewerState,
+        reposted,
+        repostedContent: content,
+      },
+    })
   }
 
   return (
@@ -192,11 +169,7 @@ function ProfilePage() {
       <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-8">
         <ProfileHeader profile={profile} />
 
-        {loading && items.length === 0 ? (
-          <div className="flex justify-center py-16">
-            <Loader size="base" />
-          </div>
-        ) : items.length === 0 ? (
+        {items.length === 0 ? (
           <p className="py-16 text-center text-sm text-kumo-subtle">
             还没有公开 memo。
           </p>
@@ -219,14 +192,17 @@ function ProfilePage() {
           </div>
         )}
 
-        {hasMore && !loading && (
+        {memos.hasNextPage && !memos.isFetchingNextPage && (
           <div className="py-6 text-center">
-            <Button variant="secondary" onClick={() => void load('next')}>
+            <Button
+              variant="secondary"
+              onClick={() => void memos.fetchNextPage()}
+            >
               加载更多
             </Button>
           </div>
         )}
-        {loading && items.length > 0 && (
+        {memos.isFetchingNextPage && (
           <div className="flex justify-center py-6">
             <Loader size="sm" />
           </div>
@@ -237,21 +213,8 @@ function ProfilePage() {
         open={commentOpen}
         onOpenChange={setCommentOpen}
         memo={commenting}
-        onCountChange={(count) =>
-          commenting &&
-          setItems((prev) =>
-            prev.map((i) =>
-              i.memo.id === commenting.id
-                ? {
-                    ...i,
-                    memo: {
-                      ...i.memo,
-                      counts: { ...i.memo.counts, comments: count },
-                    },
-                  }
-                : i,
-            ),
-          )
+        onCountsChange={(counts) =>
+          commenting && patchItem(commenting.id, { counts })
         }
       />
       <RepostDialog

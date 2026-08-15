@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { Button, InputGroup } from '@cloudflare/kumo'
 import { GlobeSimple, MagnifyingGlass, Sparkle, X } from '@phosphor-icons/react'
 
-import { getAppConfig } from '#/server/config'
-
+import { appConfigQueryOptions } from '#/lib/queries'
 import type { HomeSearch } from '#/lib/search'
 import { ThemeToggle } from './theme-toggle'
 import { UserMenu } from './user-menu'
@@ -23,21 +23,13 @@ const SEARCH_DEBOUNCE_MS = 300
 export function SiteHeader({ search, onSearchChange }: SiteHeaderProps) {
   const navigate = useNavigate()
   const [q, setQ] = useState(search.q ?? '')
-  const [site, setSite] = useState({ name: 'mome', icon: '/favicon.png' })
+  const { data: config } = useQuery(appConfigQueryOptions())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   // 外部导航（如点标签）改变 q 时同步输入框
   useEffect(() => {
     setQ(search.q ?? '')
   }, [search.q])
-
-  useEffect(() => {
-    void getAppConfig()
-      .then((config) =>
-        setSite({ name: config.siteName, icon: config.siteIcon }),
-      )
-      .catch(() => {})
-  }, [])
 
   function handleChange(value: string) {
     setQ(value)
@@ -61,11 +53,11 @@ export function SiteHeader({ search, onSearchChange }: SiteHeaderProps) {
           className="flex shrink-0 items-center gap-2 text-sm font-semibold text-kumo-strong"
         >
           <img
-            src={site.icon}
-            alt={site.name}
+            src={config?.siteIcon ?? '/favicon.png'}
+            alt={config?.siteName ?? 'mome'}
             className="h-6 w-6 object-contain"
           />
-          {site.name}
+          {config?.siteName ?? 'mome'}
         </a>
 
         <div className="min-w-0 flex-1">

@@ -4,7 +4,13 @@ import {
   useNavigate,
   useSearch,
 } from '@tanstack/react-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { Loader, useKumoToastManager } from '@cloudflare/kumo'
 
 import { Composer } from '#/components/composer'
@@ -18,13 +24,18 @@ import { RepostDialog } from '#/components/repost-dialog'
 import { SearchFiltersDialog } from '#/components/search-filters-dialog'
 import { SiteHeader } from '#/components/site-header'
 import { TagList } from '#/components/tag-list'
+import {
+  contributionQueryOptions,
+  homeFeedQueryOptions,
+  mapInfiniteItems,
+  queryKeys,
+  statsQueryOptions,
+  tagsQueryOptions,
+} from '#/lib/queries'
 import { homeSearchSchema } from '#/lib/search'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import {
   deleteMemo,
-  getContributionGraph,
-  getStats,
-  listHomeFeed,
   purgeMemo,
   restoreDeletedMemo,
   setVisibility,
@@ -33,13 +44,9 @@ import {
   updateMemo,
 } from '#/server/memos'
 import type { MemoCounts } from '#/server/interactions-core'
-import type { ContributionMonthData, MemoWithTags } from '#/server/memos'
+import type { MemoWithTags } from '#/server/memos'
 import type { TimelineItem } from '#/server/timeline-core'
 import { getSessionUser } from '#/server/session'
-import { listTags } from '#/server/tags'
-import type { TagWithCount } from '#/server/tags'
-
-const PAGE_SIZE = 20
 
 export const Route = createFileRoute('/')({
   validateSearch: homeSearchSchema,
@@ -53,18 +60,24 @@ export const Route = createFileRoute('/')({
 function Home() {
   const search = useSearch({ from: '/' })
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const toast = useKumoToastManager()
-
-  const [items, setItems] = useState<TimelineItem[]>([])
-  const [hasMore, setHasMore] = useState(false)
-  const [loading, setLoading] = useState(true)
-  const [tags, setTags] = useState<TagWithCount[]>([])
-  const [stats, setStats] = useState<{ total: number; streak: number } | null>(
-    null,
-  )
-  const [contribution, setContribution] =
-    useState<ContributionMonthData | null>(null)
-  const [contributionLoading, setContributionLoading] = useState(false)
+  const tzOffsetMinutes = new Date().getTimezoneOffset()
+  const feedOptions = homeFeedQueryOptions({ ...search, tzOffsetMinutes })
+  const feed = useInfiniteQuery(feedOptions)
+  const items = feed.data?.pages.flatMap((page) => page.items) ?? []
+  const tagsQuery = useQuery(tagsQueryOptions())
+  const statsQuery = useQuery(statsQueryOptions(tzOffsetMinutes))
+  const [contributionMonth, setContributionMonth] = useState<string>()
+  const contributionQuery = useQuery({
+    ...contributionQueryOptions(contributionMonth, tzOffsetMinutes),
+    placeholderData: keepPreviousData,
+  })
+  const tags = tagsQuery.data ?? []
+  const stats = statsQuery.data ?? null
+  const contribution = contributionQuery.data ?? null
+  const loading = feed.isPending || feed.isFetchingNextPage
+  const hasMore = Boolean(feed.hasNextPage)
   const [editing, setEditing] = useState<MemoWithTags | null>(null)
   const [editOpen, setEditOpen] = useState(false)
   const [deleting, setDeleting] = useState<MemoWithTags | null>(null)
@@ -74,16 +87,6 @@ function Home() {
   const [reposting, setReposting] = useState<MemoWithTags | null>(null)
   const [repostOpen, setRepostOpen] = useState(false)
   const [filtersOpen, setFiltersOpen] = useState(false)
-
-  // 避免闭包捕获过期值
-  const searchRef = useRef(search)
-  searchRef.current = search
-  const toastRef = useRef(toast)
-  toastRef.current = toast
-  const cursorRef = useRef<string | null>(null)
-  const loadingRef = useRef(false)
-  const reqIdRef = useRef(0)
-  const monthRef = useRef<string | null>(null)
 
   const hasFilters = Boolean(
     search.tag ||
@@ -98,186 +101,86 @@ function Home() {
   )
 
   // ── 加载 ────────────────────────────────────────────────
-  const loadInitial = useCallback(async () => {
-    const id = ++reqIdRef.current
-    loadingRef.current = true
-    setLoading(true)
-    try {
-      const s = searchRef.current
-      const [memoRes, tagRes, statsRes, graphRes] = await Promise.all([
-        listHomeFeed({
-          data: {
-            limit: PAGE_SIZE,
-            tag: s.tag,
-            q: s.q,
-            filter: s.filter,
-            visibility: s.visibility,
-            favorited: s.favorited,
-            from: s.from,
-            to: s.to,
-            tzOffsetMinutes: new Date().getTimezoneOffset(),
-          },
-        }),
-        listTags(),
-        getStats({
-          data: { tzOffsetMinutes: new Date().getTimezoneOffset() },
-        }),
-        getContributionGraph({
-          data: {
-            month: monthRef.current ?? undefined,
-            tzOffsetMinutes: new Date().getTimezoneOffset(),
-          },
-        }),
-      ])
-      if (id !== reqIdRef.current) return
-      setItems(memoRes.items)
-      cursorRef.current = memoRes.nextCursor
-      setHasMore(memoRes.nextCursor !== null)
-      setTags(tagRes)
-      setStats(statsRes)
-      setContribution(graphRes)
-      monthRef.current = graphRes.month
-    } catch {
-      if (id === reqIdRef.current) {
-        toastRef.current.add({ title: '加载失败', variant: 'error' })
-      }
-    } finally {
-      loadingRef.current = false
-      if (id === reqIdRef.current) setLoading(false)
-    }
-  }, [])
-
-  const loadMore = useCallback(async () => {
-    if (loadingRef.current || !cursorRef.current) return
-    loadingRef.current = true
-    const id = ++reqIdRef.current
-    try {
-      const s = searchRef.current
-      const res = await listHomeFeed({
-        data: {
-          cursor: cursorRef.current,
-          limit: PAGE_SIZE,
-          tag: s.tag,
-          q: s.q,
-          filter: s.filter,
-          visibility: s.visibility,
-          favorited: s.favorited,
-          from: s.from,
-          to: s.to,
-          tzOffsetMinutes: new Date().getTimezoneOffset(),
-        },
-      })
-      if (id !== reqIdRef.current) return
-      setItems((prev) => [...prev, ...res.items])
-      cursorRef.current = res.nextCursor
-      setHasMore(res.nextCursor !== null)
-    } catch {
-      if (id === reqIdRef.current) {
-        toastRef.current.add({ title: '加载更多失败', variant: 'error' })
-      }
-    } finally {
-      loadingRef.current = false
-    }
-  }, [])
+  const loadMore = useCallback(() => {
+    void feed.fetchNextPage()
+  }, [feed.fetchNextPage])
 
   useEffect(() => {
-    void loadInitial()
-    // loadInitial 稳定；search 变化时靠下方依赖触发重载
-  }, [
-    search.tag,
-    search.q,
-    search.filter,
-    search.visibility,
-    search.favorited,
-    search.from,
-    search.to,
-  ])
-
-  const refreshTags = useCallback(async () => {
-    try {
-      setTags(await listTags())
-    } catch {
-      // 静默失败
+    if (feed.isError) {
+      toast.add({ title: '加载失败', variant: 'error' })
     }
-  }, [])
+  }, [feed.errorUpdatedAt, feed.isError, toast])
 
-  const refreshContribution = useCallback(async () => {
-    try {
-      const res = await getContributionGraph({
-        data: {
-          month: monthRef.current ?? undefined,
-          tzOffsetMinutes: new Date().getTimezoneOffset(),
-        },
-      })
-      setContribution(res)
-      monthRef.current = res.month
-    } catch {
-      // 静默失败
+  function refreshMetadata() {
+    for (const queryKey of [
+      queryKeys.tags,
+      queryKeys.stats,
+      queryKeys.contribution,
+    ]) {
+      void queryClient.invalidateQueries({ queryKey })
     }
-  }, [])
+  }
 
-  async function changeContributionMonth(month: string) {
-    if (contributionLoading || !contribution) return
-    monthRef.current = month
-    setContributionLoading(true)
-    try {
-      const res = await getContributionGraph({
-        data: {
-          month,
-          tzOffsetMinutes: new Date().getTimezoneOffset(),
-        },
-      })
-      setContribution(res)
-      monthRef.current = res.month
-    } catch {
-      toastRef.current.add({ title: '月份加载失败', variant: 'error' })
-    } finally {
-      setContributionLoading(false)
+  function markOtherMemoViewsStale() {
+    for (const queryKey of [queryKeys.public, queryKeys.interactions]) {
+      void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
     }
+  }
+
+  function changeContributionMonth(month: string) {
+    if (contributionQuery.isFetching || !contribution) return
+    setContributionMonth(month)
+  }
+
+  function removeMemo(id: string) {
+    queryClient.setQueryData(feedOptions.queryKey, (data) =>
+      mapInfiniteItems(data, (item) => (item.memo.id === id ? null : item)),
+    )
   }
 
   // ── 变更 ────────────────────────────────────────────────
   function handleCreated(memo: MemoWithTags) {
-    void refreshTags()
-    void refreshContribution()
-    const s = searchRef.current
-    if (s.tag || s.q || s.filter) {
+    refreshMetadata()
+    markOtherMemoViewsStale()
+    if (search.tag || search.q || search.filter) {
       // 当前视图有筛选/归档时，乐观插入可能不符合视图条件，改为按当前条件重载
-      void loadInitial()
+      void feed.refetch()
     } else {
-      setItems((prev) => {
-        const pinnedCount = prev.filter(
+      queryClient.setQueryData(feedOptions.queryKey, (data) => {
+        if (!data || data.pages.length === 0) return data
+        const pages = [...data.pages]
+        const first = pages[0]
+        const pinnedCount = first.items.filter(
           (i) => i.kind === 'memo' && i.memo.pinned,
         ).length
-        const next = [...prev]
-        next.splice(pinnedCount, 0, {
+        const next = [...first.items]
+        const item: TimelineItem = {
           kind: 'memo',
           memo,
           author: null,
           repost: null,
-        })
-        return next
+        }
+        next.splice(pinnedCount, 0, item)
+        pages[0] = { ...first, items: next }
+        return { ...data, pages }
       })
     }
-    toastRef.current.add({ title: '已记录', variant: 'success' })
+    toast.add({ title: '已记录', variant: 'success' })
   }
 
   async function handleEdit(memo: MemoWithTags, content: string) {
     try {
       const updated = await updateMemo({ data: { id: memo.id, content } })
-      void refreshTags()
-      if (searchRef.current.tag || searchRef.current.q) {
-        await loadInitial()
+      refreshMetadata()
+      markOtherMemoViewsStale()
+      if (search.tag || search.q) {
+        await feed.refetch()
       } else {
-        setItems((prev) =>
-          prev.map((i) =>
-            i.memo.id === updated.id ? { ...i, memo: updated } : i,
-          ),
-        )
+        patchMemo(updated.id, updated)
       }
-      toastRef.current.add({ title: '已保存', variant: 'success' })
+      toast.add({ title: '已保存', variant: 'success' })
     } catch (err) {
-      toastRef.current.add({
+      toast.add({
         title: '保存失败',
         description: err instanceof Error ? err.message : '请稍后重试',
         variant: 'error',
@@ -289,13 +192,13 @@ function Home() {
   async function handleTogglePin(memo: MemoWithTags) {
     try {
       const res = await togglePin({ data: { id: memo.id } })
-      await loadInitial() // 置顶变化会影响排序，整体重载
-      toastRef.current.add({
+      await feed.refetch() // 置顶变化会影响排序，整体重载
+      toast.add({
         title: res.pinned ? '已置顶' : '已取消置顶',
         variant: 'success',
       })
     } catch {
-      toastRef.current.add({ title: '操作失败', variant: 'error' })
+      toast.add({ title: '操作失败', variant: 'error' })
     }
   }
 
@@ -303,20 +206,20 @@ function Home() {
     try {
       const res = await toggleArchive({ data: { id: memo.id } })
       // 归档/恢复后不再属于当前视图，直接移除
-      setItems((prev) => prev.filter((i) => i.memo.id !== memo.id))
-      void refreshTags()
-      void refreshContribution()
-      toastRef.current.add({
+      removeMemo(memo.id)
+      refreshMetadata()
+      markOtherMemoViewsStale()
+      toast.add({
         title: res.archived ? '已归档' : '已恢复',
         variant: 'success',
       })
     } catch (err) {
-      toastRef.current.add({
+      toast.add({
         title: '操作失败',
         description: err instanceof Error ? err.message : '请稍后重试',
         variant: 'error',
       })
-      void loadInitial() // 失败时重新同步列表
+      void feed.refetch() // 失败时重新同步列表
     }
   }
 
@@ -329,24 +232,24 @@ function Home() {
       } else {
         await deleteMemo({ data: { id: deleting.id } })
       }
-      setItems((prev) => prev.filter((i) => i.memo.id !== deleting.id))
-      void refreshTags()
-      void refreshContribution()
+      removeMemo(deleting.id)
+      refreshMetadata()
+      markOtherMemoViewsStale()
       setDeleteOpen(false)
       setDeleting(null)
-      toastRef.current.add({
+      toast.add({
         title: permanent ? '已永久删除' : '已移至回收站',
         variant: 'success',
       })
     } catch (err) {
-      toastRef.current.add({
+      toast.add({
         title: '删除失败',
         description: err instanceof Error ? err.message : '请稍后重试',
         variant: 'error',
       })
       setDeleteOpen(false)
       setDeleting(null)
-      void loadInitial() // 失败时重新同步列表
+      void feed.refetch() // 失败时重新同步列表
     }
   }
 
@@ -354,25 +257,27 @@ function Home() {
     try {
       const result = await restoreDeletedMemo({ data: { id: memo.id } })
       if (!result.restored) throw new Error('memo 已恢复或不存在')
-      setItems((prev) => prev.filter((item) => item.memo.id !== memo.id))
-      void refreshTags()
-      void refreshContribution()
-      toastRef.current.add({ title: '已恢复', variant: 'success' })
+      removeMemo(memo.id)
+      refreshMetadata()
+      markOtherMemoViewsStale()
+      toast.add({ title: '已恢复', variant: 'success' })
     } catch (err) {
-      toastRef.current.add({
+      toast.add({
         title: '恢复失败',
         description: err instanceof Error ? err.message : '请稍后重试',
         variant: 'error',
       })
-      void loadInitial()
+      void feed.refetch()
     }
   }
 
   // ── 互动 ───────────────────────────────────────────────
   function patchMemo(id: string, patch: Partial<MemoWithTags>) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === id ? { ...i, memo: { ...i.memo, ...patch } } : i,
+    queryClient.setQueryData(feedOptions.queryKey, (data) =>
+      mapInfiniteItems(data, (item) =>
+        item.memo.id === id
+          ? { ...item, memo: { ...item.memo, ...patch } }
+          : item,
       ),
     )
   }
@@ -384,12 +289,13 @@ function Home() {
         data: { id: memo.id, visibility: next },
       })
       patchMemo(memo.id, { visibility: res.visibility })
-      toastRef.current.add({
+      markOtherMemoViewsStale()
+      toast.add({
         title: res.visibility === 'public' ? '已设为公开' : '已设为私密',
         variant: 'success',
       })
     } catch {
-      toastRef.current.add({ title: '操作失败', variant: 'error' })
+      toast.add({ title: '操作失败', variant: 'error' })
     }
   }
 
@@ -400,8 +306,9 @@ function Home() {
         counts: res.counts,
         viewerState: { ...memo.viewerState, liked: res.liked },
       })
+      markOtherMemoViewsStale()
     } catch (err) {
-      toastRef.current.add({
+      toast.add({
         title: '点赞失败',
         description: err instanceof Error ? err.message : '请稍后重试',
         variant: 'error',
@@ -416,8 +323,9 @@ function Home() {
         counts: res.counts,
         viewerState: { ...memo.viewerState, favorited: res.favorited },
       })
+      markOtherMemoViewsStale()
     } catch (err) {
-      toastRef.current.add({
+      toast.add({
         title: '收藏失败',
         description: err instanceof Error ? err.message : '请稍后重试',
         variant: 'error',
@@ -425,20 +333,9 @@ function Home() {
     }
   }
 
-  function handleCommentCountChange(memo: MemoWithTags, count: number) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === memo.id
-          ? {
-              ...i,
-              memo: {
-                ...i.memo,
-                counts: { ...i.memo.counts, comments: count },
-              },
-            }
-          : i,
-      ),
-    )
+  function handleCommentCountsChange(memo: MemoWithTags, counts: MemoCounts) {
+    patchMemo(memo.id, { counts })
+    markOtherMemoViewsStale()
   }
 
   function handleReposted(
@@ -447,24 +344,15 @@ function Home() {
     reposted: boolean,
     content: string | null,
   ) {
-    setItems((prev) =>
-      prev.map((i) =>
-        i.memo.id === memo.id
-          ? {
-              ...i,
-              memo: {
-                ...i.memo,
-                counts,
-                viewerState: {
-                  ...i.memo.viewerState,
-                  reposted,
-                  repostedContent: content,
-                },
-              },
-            }
-          : i,
-      ),
-    )
+    patchMemo(memo.id, {
+      counts,
+      viewerState: {
+        ...memo.viewerState,
+        reposted,
+        repostedContent: content,
+      },
+    })
+    markOtherMemoViewsStale()
   }
 
   // ── 导航（search params 驱动） ──────────────────────────
@@ -504,14 +392,12 @@ function Home() {
             <Composer
               onCreated={handleCreated}
               onQueued={() =>
-                toastRef.current.add({
+                toast.add({
                   title: '已离线保存，联网后自动发送',
                   variant: 'success',
                 })
               }
-              onError={(msg) =>
-                toastRef.current.add({ title: msg, variant: 'error' })
-              }
+              onError={(msg) => toast.add({ title: msg, variant: 'error' })}
             />
           )}
 
@@ -520,7 +406,7 @@ function Home() {
             <div className="grid gap-6 xl:hidden">
               <ContributionGraph
                 data={contribution}
-                loading={contributionLoading}
+                loading={contributionQuery.isFetching}
                 collapsible
                 onMonthChange={(m) => void changeContributionMonth(m)}
               />
@@ -637,7 +523,7 @@ function Home() {
           <div className="grid gap-6">
             <ContributionGraph
               data={contribution}
-              loading={contributionLoading}
+              loading={contributionQuery.isFetching}
               onMonthChange={(m) => void changeContributionMonth(m)}
             />
             {!archivedView && (
@@ -672,8 +558,8 @@ function Home() {
         open={commentOpen}
         onOpenChange={setCommentOpen}
         memo={commenting}
-        onCountChange={(count) =>
-          commenting && handleCommentCountChange(commenting, count)
+        onCountsChange={(counts) =>
+          commenting && handleCommentCountsChange(commenting, counts)
         }
       />
       <RepostDialog

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { startAuthentication } from '@simplewebauthn/browser'
 import {
   Button,
@@ -17,8 +18,8 @@ import {
 } from '@phosphor-icons/react'
 
 import { authClient } from '#/lib/auth-client'
+import { appConfigQueryOptions } from '#/lib/queries'
 import { cn } from '#/lib/utils'
-import { getAppConfig } from '#/server/config'
 import {
   generatePasskeyLoginOptionsFn,
   verifyPasskeyLoginFn,
@@ -37,13 +38,8 @@ const TABS: Array<{ key: Tab; label: string }> = [
  */
 export function LoginTabs({ onDone }: { onDone?: () => void }) {
   const [tab, setTab] = useState<Tab>('password')
-  const [emailEnabled, setEmailEnabled] = useState(false)
-
-  useEffect(() => {
-    void getAppConfig()
-      .then((c) => setEmailEnabled(c.emailEnabled))
-      .catch(() => setEmailEnabled(false))
-  }, [])
+  const { data: config } = useQuery(appConfigQueryOptions())
+  const emailEnabled = config?.emailEnabled ?? false
 
   useEffect(() => {
     if (tab === 'otp' && !emailEnabled) setTab('password')
