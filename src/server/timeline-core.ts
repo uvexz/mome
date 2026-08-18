@@ -93,7 +93,7 @@ export async function loadMemoAuthors(
       id: r.id,
       username: r.username,
       name: r.name,
-      image: resolveAvatarUrl(r.image),
+      image: resolveAvatarUrl(r.image, r.username),
     })
   }
   return map
@@ -476,7 +476,7 @@ async function fetchMergedTimeline(
         id: me.id,
         username: me.username,
         name: me.name,
-        image: resolveAvatarUrl(me.image),
+        image: resolveAvatarUrl(me.image, me.username),
       }
     : { id: userId, username: 'me', name: '我', image: null }
 

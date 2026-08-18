@@ -337,7 +337,7 @@ export async function addCommentForUser(
       id: first.authorId,
       name: first.authorName,
       username: first.authorUsername,
-      image: resolveAvatarUrl(first.authorImage),
+      image: resolveAvatarUrl(first.authorImage, first.authorUsername),
     },
   }
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
@@ -418,7 +418,7 @@ export async function listCommentsForMemo(
         id: r.authorId,
         name: r.authorName,
         username: r.authorUsername,
-        image: resolveAvatarUrl(r.authorImage),
+        image: resolveAvatarUrl(r.authorImage, r.authorUsername),
       },
     })),
     nextCursor: hasMore ? page[page.length - 1].id : null,

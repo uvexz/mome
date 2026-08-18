@@ -233,7 +233,12 @@ function ProfileHeader({ profile }: { profile: PublicProfile }) {
   return (
     <section className="grid gap-4">
       <div className="flex items-center gap-4">
-        <Avatar image={profile.image} size={64} className="shrink-0" />
+        <Avatar
+          username={profile.username}
+          image={profile.image}
+          size={64}
+          className="shrink-0"
+        />
         <div className="min-w-0">
           <h1 className="text-lg font-semibold text-kumo-strong">
             {profile.name}

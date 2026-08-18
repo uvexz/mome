@@ -646,7 +646,11 @@ function ProfileSection({
     >
       <div className="grid gap-4">
         <div className="flex items-center gap-4">
-          <Avatar image={image} size={56} />
+          <Avatar
+            username={profile.user.username ?? profile.user.name}
+            image={image}
+            size={56}
+          />
           <div className="flex flex-wrap items-center gap-2">
             <input
               ref={fileRef}

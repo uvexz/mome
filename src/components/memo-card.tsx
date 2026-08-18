@@ -154,7 +154,12 @@ export const MemoCard = memoize(function MemoCard({
       )}
       {author && (
         <div className="mb-3 flex items-center gap-2.5">
-          <Avatar image={author.image} size={28} className="shrink-0" />
+          <Avatar
+            username={author.username}
+            image={author.image}
+            size={28}
+            className="shrink-0"
+          />
           <div className="min-w-0 flex-1">
             <button
               type="button"

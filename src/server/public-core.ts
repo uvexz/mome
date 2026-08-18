@@ -81,7 +81,7 @@ export async function getPublicProfileByUsername(
     username: u.username,
     name: u.name,
     bio: u.bio,
-    image: resolveAvatarUrl(u.image),
+    image: resolveAvatarUrl(u.image, u.username),
     createdAt: u.createdAt.toISOString(),
     stats: {
       memos: memoCount,
@@ -233,7 +233,7 @@ export async function listPublicFeed(
       id: u.id,
       username: u.username,
       name: u.name,
-      image: resolveAvatarUrl(u.image),
+      image: resolveAvatarUrl(u.image, u.username),
     }
     const originalAuthor = authorMap.get(c.memoRow.id) ?? profileAuthor
     return {
@@ -333,7 +333,7 @@ export async function getPublicMemoDetail(
       id: u.id,
       username: u.username,
       name: u.name,
-      image: resolveAvatarUrl(u.image),
+      image: resolveAvatarUrl(u.image, u.username),
     },
   }
 }
@@ -430,7 +430,7 @@ export async function listAllPublicMemos(
         id: author.id,
         username: author.username,
         name: author.name,
-        image: resolveAvatarUrl(author.image),
+        image: resolveAvatarUrl(author.image, author.username),
       } satisfies MemoAuthor,
       repost: null,
     }

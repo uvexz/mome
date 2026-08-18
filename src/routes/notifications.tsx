@@ -73,6 +73,7 @@ function NotificationsPage() {
             {items.map((item) => (
               <article key={item.id} className="flex gap-3 px-1 py-4">
                 <Avatar
+                  username={item.actor.username}
                   image={item.actor.image}
                   size={32}
                   className="shrink-0"

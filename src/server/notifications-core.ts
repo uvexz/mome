@@ -67,7 +67,7 @@ export async function listNotificationsForUser(
         id: row.actorId,
         name: row.actorName,
         username: row.actorUsername,
-        image: resolveAvatarUrl(row.actorImage),
+        image: resolveAvatarUrl(row.actorImage, row.actorUsername),
       },
     })),
     nextCursor: hasMore ? page[page.length - 1].id : null,

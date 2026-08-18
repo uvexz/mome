@@ -229,7 +229,11 @@ function MemoPage() {
       <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-8">
         <article className="rounded-xl bg-kumo-base px-5 py-4 ring ring-kumo-line">
           <div className="mb-4 flex items-center gap-2.5">
-            <Avatar image={detail.author.image} size={36} />
+            <Avatar
+              username={detail.author.username}
+              image={detail.author.image}
+              size={36}
+            />
             <div className="min-w-0">
               <p className="truncate text-sm font-medium text-kumo-default">
                 {detail.author.name}
@@ -329,6 +333,7 @@ function MemoPage() {
               {comments.map((comment) => (
                 <div key={comment.id} className="flex items-start gap-2.5">
                   <Avatar
+                    username={comment.author.username}
                     image={comment.author.image}
                     size={28}
                     className="mt-0.5 shrink-0"

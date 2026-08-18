@@ -1322,7 +1322,11 @@ function UsersSection({
                 <Table.Row key={item.id}>
                   <Table.Cell>
                     <div className="flex min-w-0 items-center gap-3">
-                      <Avatar image={item.image} size={32} />
+                      <Avatar
+                        username={item.username}
+                        image={item.image}
+                        size={32}
+                      />
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className="truncate text-sm font-medium text-kumo-strong">

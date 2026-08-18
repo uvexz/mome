@@ -164,6 +164,7 @@ export function MemoCommentsDialog({
               {items.map((comment) => (
                 <div key={comment.id} className="flex items-start gap-2.5">
                   <Avatar
+                    username={comment.author.username}
                     image={comment.author.image}
                     size={28}
                     className="mt-0.5 shrink-0"

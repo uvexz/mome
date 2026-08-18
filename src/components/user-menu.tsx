@@ -56,7 +56,11 @@ export function UserMenu() {
             aria-label="用户菜单"
             title={user.name}
           >
-            <Avatar image={user.image} size={28} />
+            <Avatar
+              username={user.username ?? user.name}
+              image={user.image}
+              size={28}
+            />
             <span className="ml-1.5 hidden min-w-0 max-w-[8.5rem] truncate text-sm font-medium sm:inline">
               {user.name}
             </span>
