@@ -650,6 +650,7 @@ function ProfileSection({
             username={profile.user.username ?? profile.user.name}
             image={image}
             size={56}
+            animate="always"
           />
           <div className="flex flex-wrap items-center gap-2">
             <input

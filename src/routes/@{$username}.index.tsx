@@ -237,6 +237,7 @@ function ProfileHeader({ profile }: { profile: PublicProfile }) {
           username={profile.username}
           image={profile.image}
           size={64}
+          animate="always"
           className="shrink-0"
         />
         <div className="min-w-0">

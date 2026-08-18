@@ -7,3 +7,11 @@ export function resolveAvatarUrl(
 ): string {
   return image || blobatarUri(username)
 }
+
+/** 判断展示值是否为该用户名生成的默认 blobatar。 */
+export function isDefaultAvatar(
+  image: string | null | undefined,
+  username: string,
+): boolean {
+  return !image || image === blobatarUri(username)
+}

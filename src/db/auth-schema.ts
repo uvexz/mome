@@ -56,6 +56,8 @@ export const account = sqliteTable(
     id: text('id').primaryKey(),
     accountId: text('account_id').notNull(),
     providerId: text('provider_id').notNull(),
+    // Better Auth 1.7 namespaces account IDs by issuer.
+    issuer: text('issuer').notNull().default('local:credential'),
     userId: text('user_id')
       .notNull()
       .references(() => user.id, { onDelete: 'cascade' }),
@@ -75,7 +77,13 @@ export const account = sqliteTable(
       .$onUpdate(() => new Date())
       .notNull(),
   },
-  (table) => [index('account_userId_idx').on(table.userId)],
+  (table) => [
+    index('account_userId_idx').on(table.userId),
+    uniqueIndex('account_issuer_account_id_unique').on(
+      table.issuer,
+      table.accountId,
+    ),
+  ],
 )
 
 export const verification = sqliteTable(

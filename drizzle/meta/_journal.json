@@ -71,6 +71,13 @@
       "when": 1786793511342,
       "tag": "0009_worried_virginia_dare",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1787060898372,
+      "tag": "0010_rapid_multiple_man",
+      "breakpoints": true
     }
   ]
 }
