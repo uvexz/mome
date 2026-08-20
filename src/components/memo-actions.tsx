@@ -7,7 +7,6 @@ import {
   PencilSimple,
   PushPin,
   PushPinSlash,
-  Quotes,
   ArrowCounterClockwise,
   Trash,
   TrayArrowUp,
@@ -22,7 +21,6 @@ interface MemoActionsProps {
   onToggleGlobalPin?: () => void
   onToggleVisibility?: () => void
   onEdit?: () => void
-  onReference?: () => void
   onToggleArchive?: () => void
   onDelete?: () => void
   deleted?: boolean
@@ -39,7 +37,6 @@ export function MemoActions({
   onToggleGlobalPin,
   onToggleVisibility,
   onEdit,
-  onReference,
   onToggleArchive,
   onDelete,
   deleted = false,
@@ -117,14 +114,6 @@ export function MemoActions({
                   onClick={onEdit}
                 >
                   编辑
-                </DropdownMenu.Item>
-              )}
-              {onReference && (
-                <DropdownMenu.Item
-                  icon={<Quotes size={15} />}
-                  onClick={onReference}
-                >
-                  引用到新 memo
                 </DropdownMenu.Item>
               )}
               {onToggleVisibility && (

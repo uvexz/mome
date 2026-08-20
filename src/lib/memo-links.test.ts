@@ -19,8 +19,8 @@ describe('memo links', () => {
   })
 
   test('renders references as internal Markdown links', () => {
-    expect(renderMemoReferences(`see ${memoReference(FIRST)}`)).toBe(
-      `see [MEMO](/memo/${FIRST})`,
+    expect(renderMemoReferences(`see ${memoReference(FIRST)}`, 'alice')).toBe(
+      `see [MEMO](/@alice/${FIRST})`,
     )
   })
 })

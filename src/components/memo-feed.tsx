@@ -14,7 +14,6 @@ interface MemoFeedProps {
   onLoadMore: () => void
   onTogglePin: (memo: MemoWithTags) => void
   onEdit: (memo: MemoWithTags) => void
-  onReference: (memo: MemoWithTags) => void
   onToggleArchive: (memo: MemoWithTags) => void
   onDelete: (memo: MemoWithTags) => void
   deleted?: boolean
@@ -73,7 +72,6 @@ export function MemoFeed({
   onLoadMore,
   onTogglePin,
   onEdit,
-  onReference,
   onToggleArchive,
   onDelete,
   deleted = false,
@@ -106,10 +104,12 @@ export function MemoFeed({
   }, [hasMore, loading, onLoadMore])
 
   return (
-    <div className="grid gap-8">
+    <div className="grid gap-6">
       {groups.map((group, index) => (
         <section key={group.date} aria-label={group.label}>
-          <div className="mb-3 flex items-center gap-3">
+          <div
+            className={`flex items-center gap-3 ${index === 0 ? 'mb-3' : 'mb-5'}`}
+          >
             <h2 className="shrink-0 font-mono text-xs text-kumo-subtle">
               {group.label}
             </h2>
@@ -140,7 +140,6 @@ export function MemoFeed({
                 deleted={deleted}
                 onTogglePin={deleted ? undefined : onTogglePin}
                 onEdit={deleted ? undefined : onEdit}
-                onReference={deleted ? undefined : onReference}
                 onToggleArchive={deleted ? undefined : onToggleArchive}
                 onDelete={deleted ? undefined : onDelete}
                 onRestore={deleted ? onRestore : undefined}

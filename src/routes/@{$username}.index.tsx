@@ -1,5 +1,11 @@
-import { createFileRoute, notFound, useNavigate } from '@tanstack/react-router'
+import {
+  createFileRoute,
+  notFound,
+  useNavigate,
+  useSearch,
+} from '@tanstack/react-router'
 import { useState } from 'react'
+import { z } from 'zod'
 import {
   useQueryClient,
   useSuspenseInfiniteQuery,
@@ -25,14 +31,16 @@ import type { PublicProfile } from '#/server/public-core'
 import type { MemoWithTags } from '#/server/memos'
 
 export const Route = createFileRoute('/@{$username}/')({
-  loader: async ({ context, params }) => {
+  validateSearch: z.object({ tag: z.string().max(100).optional() }),
+  loaderDeps: ({ search }) => ({ tag: search.tag }),
+  loader: async ({ context, params, deps }) => {
     const username = params.username.toLowerCase()
     const profile = await context.queryClient.ensureQueryData(
       publicProfileQueryOptions(username),
     )
     if (!profile) throw notFound()
     await context.queryClient.ensureInfiniteQueryData(
-      publicMemosQueryOptions(profile.username),
+      publicMemosQueryOptions(profile.username, deps.tag),
     )
   },
   component: ProfilePage,
@@ -40,6 +48,7 @@ export const Route = createFileRoute('/@{$username}/')({
 
 function ProfilePage() {
   const username = Route.useParams().username.toLowerCase()
+  const search = useSearch({ from: '/@{$username}/' })
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const toast = useKumoToastManager()
@@ -47,7 +56,7 @@ function ProfilePage() {
   const { data: profile } = useSuspenseQuery(
     publicProfileQueryOptions(username),
   )
-  const memosOptions = publicMemosQueryOptions(username)
+  const memosOptions = publicMemosQueryOptions(username, search.tag)
   const memos = useSuspenseInfiniteQuery(memosOptions)
   if (!profile) throw notFound()
   const items = memos.data.pages.flatMap((page) => page.items)
@@ -171,7 +180,9 @@ function ProfilePage() {
 
         {items.length === 0 ? (
           <p className="py-16 text-center text-sm text-kumo-subtle">
-            还没有公开 memo。
+            {search.tag
+              ? `#${search.tag} 下还没有公开 memo。`
+              : '还没有公开 memo。'}
           </p>
         ) : (
           <div className="mt-6 grid gap-2">
@@ -183,6 +194,13 @@ function ProfilePage() {
                 author={item.author}
                 repost={item.repost}
                 hideVisibility
+                onTagClick={(tag) =>
+                  void navigate({
+                    to: '/@{$username}',
+                    params: { username: profile.username },
+                    search: { tag },
+                  })
+                }
                 onLike={(m) => void handleLike(m)}
                 onFavorite={(m) => void handleFavorite(m)}
                 onComment={handleComment}

@@ -251,7 +251,10 @@ function MemoPage() {
           </div>
 
           <div className="text-sm leading-relaxed text-kumo-default">
-            <HashtagText content={memo.content} />
+            <HashtagText
+              content={memo.content}
+              memoUsername={detail.author.username}
+            />
           </div>
 
           <div className="mt-3 flex items-center gap-2.5">

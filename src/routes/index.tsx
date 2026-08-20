@@ -458,12 +458,6 @@ function Home() {
                 setEditing(m)
                 setEditOpen(true)
               }}
-              onReference={(memo) =>
-                void navigate({
-                  to: '/capture',
-                  search: { reference: memo.id },
-                })
-              }
               onToggleArchive={(m) => void handleToggleArchive(m)}
               onDelete={(m) => {
                 setDeleting(m)

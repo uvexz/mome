@@ -23,7 +23,6 @@ import { Route as SignupRouteImport } from './routes/signup'
 import { Route as AtChar123usernameChar125IndexRouteImport } from './routes/@{$username}.index'
 import { Route as AtChar123usernameChar125MemoIdRouteImport } from './routes/@{$username}.$memoId'
 import { Route as ApiDevOtpRouteImport } from './routes/api/dev-otp'
-import { Route as MemoMemoIdRouteImport } from './routes/memo.$memoId'
 import { Route as V1ClipsRouteImport } from './routes/v1/clips'
 import { Route as V1MeRouteImport } from './routes/v1/me'
 import { Route as V1MemosRouteImport } from './routes/v1/memos'
@@ -105,11 +104,6 @@ const ApiDevOtpRoute = ApiDevOtpRouteImport.update({
   path: '/api/dev-otp',
   getParentRoute: () => rootRouteImport,
 } as any)
-const MemoMemoIdRoute = MemoMemoIdRouteImport.update({
-  id: '/memo/$memoId',
-  path: '/memo/$memoId',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const V1ClipsRoute = V1ClipsRouteImport.update({
   id: '/v1/clips',
   path: '/v1/clips',
@@ -160,7 +154,6 @@ export interface FileRoutesByFullPath {
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
-  '/memo/$memoId': typeof MemoMemoIdRoute
   '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
   '/v1/memos': typeof V1MemosRouteWithChildren
@@ -183,7 +176,6 @@ export interface FileRoutesByTo {
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
-  '/memo/$memoId': typeof MemoMemoIdRoute
   '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
   '/v1/memos': typeof V1MemosRouteWithChildren
@@ -208,7 +200,6 @@ export interface FileRoutesById {
   '/signup': typeof SignupRoute
   '/@{$username}/$memoId': typeof AtChar123usernameChar125MemoIdRoute
   '/api/dev-otp': typeof ApiDevOtpRoute
-  '/memo/$memoId': typeof MemoMemoIdRoute
   '/v1/clips': typeof V1ClipsRoute
   '/v1/me': typeof V1MeRoute
   '/v1/memos': typeof V1MemosRouteWithChildren
@@ -234,7 +225,6 @@ export interface FileRouteTypes {
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
-    | '/memo/$memoId'
     | '/v1/clips'
     | '/v1/me'
     | '/v1/memos'
@@ -257,7 +247,6 @@ export interface FileRouteTypes {
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
-    | '/memo/$memoId'
     | '/v1/clips'
     | '/v1/me'
     | '/v1/memos'
@@ -281,7 +270,6 @@ export interface FileRouteTypes {
     | '/signup'
     | '/@{$username}/$memoId'
     | '/api/dev-otp'
-    | '/memo/$memoId'
     | '/v1/clips'
     | '/v1/me'
     | '/v1/memos'
@@ -305,7 +293,6 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRoute
   SignupRoute: typeof SignupRoute
   ApiDevOtpRoute: typeof ApiDevOtpRoute
-  MemoMemoIdRoute: typeof MemoMemoIdRoute
   V1ClipsRoute: typeof V1ClipsRoute
   V1MeRoute: typeof V1MeRoute
   V1MemosRoute: typeof V1MemosRouteWithChildren
@@ -414,13 +401,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiDevOtpRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/memo/$memoId': {
-      id: '/memo/$memoId'
-      path: '/memo/$memoId'
-      fullPath: '/memo/$memoId'
-      preLoaderRoute: typeof MemoMemoIdRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/v1/clips': {
       id: '/v1/clips'
       path: '/v1/clips'
@@ -513,7 +493,6 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRoute,
   SignupRoute: SignupRoute,
   ApiDevOtpRoute: ApiDevOtpRoute,
-  MemoMemoIdRoute: MemoMemoIdRoute,
   V1ClipsRoute: V1ClipsRoute,
   V1MeRoute: V1MeRoute,
   V1MemosRoute: V1MemosRouteWithChildren,

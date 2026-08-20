@@ -171,13 +171,19 @@ export const publicProfileQueryOptions = (username: string) =>
     staleTime: 60_000,
   })
 
-export const publicMemosQueryOptions = (username: string) =>
+export const publicMemosQueryOptions = (username: string, tag?: string) =>
   infiniteQueryOptions({
-    queryKey: [...queryKeys.public, 'profile-memos', username] as const,
+    queryKey: [
+      ...queryKeys.public,
+      'profile-memos',
+      username,
+      { tag },
+    ] as const,
     queryFn: ({ pageParam }) =>
       listPublicMemos({
         data: {
           username,
+          tag,
           cursor: pageParam ?? undefined,
           limit: PAGE_SIZE,
         },

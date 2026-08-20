@@ -6,7 +6,6 @@ import {
   ArrowsLeftRight,
   Bell,
   GearSix,
-  House,
   ShieldCheck,
   SignOut,
   Trash,
@@ -67,90 +66,55 @@ export function UserMenu() {
           </Button>
         }
       />
-      <DropdownMenu.Content sideOffset={6} align="end">
+      <DropdownMenu.Content
+        sideOffset={6}
+        align="end"
+        className="w-[min(15rem,calc(100vw-1rem))]"
+      >
         <DropdownMenu.Group>
           <DropdownMenu.Label>
-            <span className="block text-xs text-kumo-subtle">{user.email}</span>
+            <span className="block truncate text-xs text-kumo-subtle">
+              {user.email}
+            </span>
           </DropdownMenu.Label>
           <DropdownMenu.Separator />
-          <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger icon={House}>
-              我的内容
-            </DropdownMenu.SubTrigger>
-            <DropdownMenu.SubContent>
-              <DropdownMenu.Group>
-                {user.username && (
-                  <DropdownMenu.Item
-                    icon={<UserCircle size={15} />}
-                    onClick={() =>
-                      void navigate({
-                        to: '/@{$username}',
-                        params: { username: user.username! },
-                      })
-                    }
-                  >
-                    我的主页
-                  </DropdownMenu.Item>
-                )}
-                <DropdownMenu.Item
-                  icon={<Archive size={15} />}
-                  onClick={() =>
-                    void navigate({
-                      to: '/',
-                      search: { filter: 'archived' },
-                    })
-                  }
-                >
-                  归档
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  icon={<Trash size={15} />}
-                  onClick={() =>
-                    void navigate({
-                      to: '/',
-                      search: { filter: 'deleted' },
-                    })
-                  }
-                >
-                  回收站
-                </DropdownMenu.Item>
-              </DropdownMenu.Group>
-            </DropdownMenu.SubContent>
-          </DropdownMenu.Sub>
-          <DropdownMenu.Sub>
-            <DropdownMenu.SubTrigger icon={Bell}>
-              <span className="flex w-full items-center justify-between gap-4">
-                通知与互动
-                {unread > 0 && (
-                  <span className="min-w-5 rounded-full bg-accent px-1.5 text-center font-mono text-[0.9em] text-white">
-                    {unread > 99 ? '99+' : unread}
-                  </span>
-                )}
-              </span>
-            </DropdownMenu.SubTrigger>
-            <DropdownMenu.SubContent>
-              <DropdownMenu.Group>
-                <DropdownMenu.Item
-                  icon={<Bell size={15} />}
-                  onClick={() => {
-                    queryClient.setQueryData(
-                      [...queryKeys.notifications, 'unread'],
-                      { count: 0 },
-                    )
-                    void navigate({ to: '/notifications' })
-                  }}
-                >
-                  通知
-                </DropdownMenu.Item>
-                <DropdownMenu.Item
-                  icon={<ArrowsLeftRight size={15} />}
-                  onClick={() => void navigate({ to: '/interactions' })}
-                >
-                  互动
-                </DropdownMenu.Item>
-              </DropdownMenu.Group>
-            </DropdownMenu.SubContent>
-          </DropdownMenu.Sub>
+          {user.username && (
+            <DropdownMenu.Item
+              icon={<UserCircle size={15} />}
+              onClick={() =>
+                void navigate({
+                  to: '/@{$username}',
+                  params: { username: user.username! },
+                })
+              }
+            >
+              我的主页
+            </DropdownMenu.Item>
+          )}
+          <DropdownMenu.Item
+            icon={<Bell size={15} />}
+            onClick={() => {
+              queryClient.setQueryData([...queryKeys.notifications, 'unread'], {
+                count: 0,
+              })
+              void navigate({ to: '/notifications' })
+            }}
+          >
+            <span className="flex w-full items-center justify-between gap-4">
+              通知
+              {unread > 0 && (
+                <span className="min-w-5 rounded-full bg-accent px-1.5 text-center font-mono text-[0.9em] text-white">
+                  {unread > 99 ? '99+' : unread}
+                </span>
+              )}
+            </span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            icon={<ArrowsLeftRight size={15} />}
+            onClick={() => void navigate({ to: '/interactions' })}
+          >
+            互动
+          </DropdownMenu.Item>
           <DropdownMenu.Item
             icon={<GearSix size={15} />}
             onClick={() => void navigate({ to: '/settings' })}
@@ -165,12 +129,46 @@ export function UserMenu() {
               管理
             </DropdownMenu.Item>
           )}
-          <DropdownMenu.Separator />
+        </DropdownMenu.Group>
+
+        <DropdownMenu.Separator />
+        <DropdownMenu.Group className="flex items-center gap-1">
           <DropdownMenu.Item
-            icon={<SignOut size={15} />}
+            icon={<SignOut size={16} className="mr-0" />}
+            aria-label="退出登录"
+            title="退出登录"
+            className="mr-auto size-8 justify-center p-0"
             onClick={() => void handleSignOut()}
           >
-            退出登录
+            <span className="sr-only">退出登录</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            icon={<Archive size={15} />}
+            aria-label="归档"
+            title="归档"
+            className="size-8 justify-center p-0"
+            onClick={() =>
+              void navigate({
+                to: '/',
+                search: { filter: 'archived' },
+              })
+            }
+          >
+            <span className="sr-only">归档</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            icon={<Trash size={15} />}
+            aria-label="回收站"
+            title="回收站"
+            className="size-8 justify-center p-0"
+            onClick={() =>
+              void navigate({
+                to: '/',
+                search: { filter: 'deleted' },
+              })
+            }
+          >
+            <span className="sr-only">回收站</span>
           </DropdownMenu.Item>
         </DropdownMenu.Group>
       </DropdownMenu.Content>

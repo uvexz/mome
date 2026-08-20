@@ -28,6 +28,7 @@ export const listPublicMemos = createServerFn({ method: 'GET' })
   .validator(
     z.object({
       username: usernameSchema,
+      tag: z.string().max(100).optional(),
       cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
     }),
@@ -36,6 +37,7 @@ export const listPublicMemos = createServerFn({ method: 'GET' })
     listPublicFeed(data.username, {
       cursor: data.cursor,
       limit: data.limit,
+      tag: data.tag,
       viewerId: await viewerId(),
     }),
   )

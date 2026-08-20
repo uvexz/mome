@@ -10,6 +10,7 @@ import {
 } from '@phosphor-icons/react'
 
 import { HashtagText } from '#/components/hashtag-text'
+import { authClient } from '#/lib/auth-client'
 import { relativeTime } from '#/lib/date'
 import { tagsQueryOptions } from '#/lib/queries'
 import { getReviewMemos } from '#/server/memos'
@@ -35,6 +36,7 @@ export const Route = createFileRoute('/review')({
 
 function Review() {
   const navigate = useNavigate()
+  const { data: session } = authClient.useSession()
   const [items, setItems] = useState<MemoWithTags[] | null>(null)
   const { data: tags } = useSuspenseQuery(tagsQueryOptions())
   const [mode, setMode] = useState<ReviewMode>('least-reviewed')
@@ -138,15 +140,21 @@ function Review() {
                 className="rounded-lg bg-kumo-base px-5 py-4 ring ring-kumo-line"
               >
                 <div className="text-sm leading-relaxed text-kumo-default">
-                  <HashtagText content={memo.content} />
+                  <HashtagText
+                    content={memo.content}
+                    memoUsername={session?.user.username ?? undefined}
+                  />
                 </div>
                 <div className="mt-2.5 flex items-center justify-between gap-3">
                   <button
                     type="button"
                     onClick={() =>
                       void navigate({
-                        to: '/memo/$memoId',
-                        params: { memoId: memo.id },
+                        to: '/@{$username}/$memoId',
+                        params: {
+                          username: session?.user.username ?? '',
+                          memoId: memo.id,
+                        },
                       })
                     }
                     className="font-mono text-xs text-kumo-subtle hover:text-accent"

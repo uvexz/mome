@@ -28,9 +28,11 @@ const HASHTAG_RE =
 export const HashtagText = memo(function HashtagText({
   content,
   onTagClick,
+  memoUsername,
 }: {
   content: string
   onTagClick?: (tag: string) => void
+  memoUsername?: string
 }) {
   // pre-wrap 只放在叶子容器（p/li/标题/单元格），
   // 避免块元素之间的换行文本节点被渲染成空行
@@ -41,7 +43,7 @@ export const HashtagText = memo(function HashtagText({
           remarkPlugins={[remarkGfm]}
           components={markdownComponents}
         >
-          {renderMemoReferences(content)}
+          {renderMemoReferences(content, memoUsername)}
         </ReactMarkdown>
       </div>
     </HashtagClickContext.Provider>
@@ -90,7 +92,7 @@ const markdownComponents: Components = {
     <del className="text-kumo-subtle">{transformInline(children)}</del>
   ),
   a: ({ href, children }) => {
-    const internal = href?.startsWith('/memo/')
+    const internal = href?.startsWith('/@')
     return (
       <a
         href={href}

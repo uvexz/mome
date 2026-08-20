@@ -5,6 +5,7 @@ import { Button, Loader } from '@cloudflare/kumo'
 import { ArrowLeft, Bell } from '@phosphor-icons/react'
 
 import { Avatar } from '#/components/avatar'
+import { authClient } from '#/lib/auth-client'
 import { relativeTime } from '#/lib/date'
 import { notificationsQueryOptions, queryKeys } from '#/lib/queries'
 import { markNotificationsRead } from '#/server/notifications'
@@ -29,6 +30,7 @@ export const Route = createFileRoute('/notifications')({
 
 function NotificationsPage() {
   const navigate = useNavigate()
+  const { data: session } = authClient.useSession()
   const queryClient = useQueryClient()
   const query = useInfiniteQuery(notificationsQueryOptions())
   const items = query.data?.pages.flatMap((page) => page.items) ?? []
@@ -95,8 +97,11 @@ function NotificationsPage() {
                     className="mt-1.5 line-clamp-2 text-left text-sm text-kumo-subtle hover:text-kumo-default"
                     onClick={() =>
                       void navigate({
-                        to: '/memo/$memoId',
-                        params: { memoId: item.memo.id },
+                        to: '/@{$username}/$memoId',
+                        params: {
+                          username: session?.user.username ?? '',
+                          memoId: item.memo.id,
+                        },
                       })
                     }
                   >

@@ -22,7 +22,6 @@ interface MemoCardProps {
   onTogglePin?: (memo: MemoWithTags) => void
   onToggleGlobalPin?: (memo: MemoWithTags) => void
   onEdit?: (memo: MemoWithTags) => void
-  onReference?: (memo: MemoWithTags) => void
   onToggleArchive?: (memo: MemoWithTags) => void
   onDelete?: (memo: MemoWithTags) => void
   deleted?: boolean
@@ -52,7 +51,6 @@ export const MemoCard = memoize(function MemoCard({
   onTogglePin,
   onToggleGlobalPin,
   onEdit,
-  onReference,
   onToggleArchive,
   onDelete,
   deleted = false,
@@ -78,12 +76,6 @@ export const MemoCard = memoize(function MemoCard({
 
   function openMemoPage() {
     if (deleted) return
-    const ownMemo =
-      !author && (!profileUsername || profileUsername === myUsername)
-    if (ownMemo) {
-      void navigate({ to: '/memo/$memoId', params: { memoId: memo.id } })
-      return
-    }
     if (!username) return
     void navigate({
       to: '/@{$username}/$memoId',
@@ -127,8 +119,8 @@ export const MemoCard = memoize(function MemoCard({
   }
 
   return (
-    <article className="group relative min-w-0 overflow-hidden rounded-2xl bg-kumo-base ring ring-kumo-line hover:ring-accent/45 focus-within:ring-accent/60">
-      <div className="relative px-5 pb-3.5 pt-[18px] sm:px-6 sm:pb-4 sm:pt-5">
+    <article className="group relative isolate min-w-0">
+      <div className="relative z-10 rounded-2xl bg-kumo-base px-5 pb-3.5 pt-[18px] ring ring-kumo-line group-focus-within:ring-accent/60 sm:px-6 sm:pb-4 sm:pt-5">
         {repost && (
           <div className="mb-3 flex flex-wrap items-start gap-x-1.5 gap-y-0.5 text-xs text-kumo-subtle">
             <span className="h-lh flex shrink-0 items-center">
@@ -153,7 +145,11 @@ export const MemoCard = memoize(function MemoCard({
         )}
         {repost?.content && (
           <div className="mb-3 rounded-lg bg-kumo-tint px-4 py-2.5 text-sm text-kumo-subtle">
-            <HashtagText content={repost.content} onTagClick={onTagClick} />
+            <HashtagText
+              content={repost.content}
+              onTagClick={onTagClick}
+              memoUsername={repost.reposter.username}
+            />
           </div>
         )}
         {author && (
@@ -183,7 +179,11 @@ export const MemoCard = memoize(function MemoCard({
           </div>
         )}
         <div className="max-w-[52ch] text-[15px] leading-[1.75] text-kumo-strong sm:text-base sm:leading-[1.7]">
-          <HashtagText content={memo.content} onTagClick={onTagClick} />
+          <HashtagText
+            content={memo.content}
+            onTagClick={onTagClick}
+            memoUsername={username ?? undefined}
+          />
         </div>
 
         {(memo.globalPinned || (showUserPin && memo.pinned)) && (
@@ -204,7 +204,7 @@ export const MemoCard = memoize(function MemoCard({
         )}
       </div>
 
-      <div className="flex items-center justify-between gap-3 border-t border-kumo-line bg-kumo-tint/45 px-5 py-2.5 sm:px-6">
+      <div className="relative z-0 -mt-3 flex items-center justify-between gap-3 rounded-b-2xl bg-kumo-tint/45 px-5 pb-2.5 pt-5 ring ring-kumo-line group-focus-within:ring-accent/60 sm:px-6">
         {deleted ? (
           <span className="font-mono text-xs text-kumo-subtle">
             {memo.deletedAt
@@ -245,7 +245,6 @@ export const MemoCard = memoize(function MemoCard({
             onTogglePin ||
             onToggleGlobalPin ||
             onEdit ||
-            onReference ||
             onToggleArchive ||
             onDelete ||
             onToggleVisibility) && (
@@ -263,7 +262,6 @@ export const MemoCard = memoize(function MemoCard({
                 onToggleVisibility ? () => onToggleVisibility(memo) : undefined
               }
               onEdit={onEdit ? () => onEdit(memo) : undefined}
-              onReference={onReference ? () => onReference(memo) : undefined}
               onToggleArchive={
                 onToggleArchive ? () => onToggleArchive(memo) : undefined
               }

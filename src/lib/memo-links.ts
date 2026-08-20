@@ -8,9 +8,13 @@ export function parseMemoReferences(content: string): string[] {
   return [...ids]
 }
 
-export function renderMemoReferences(content: string): string {
+export function renderMemoReferences(
+  content: string,
+  username?: string,
+): string {
   return content.replace(MEMO_LINK_RE, (_match, id: string) => {
-    return `[MEMO](/memo/${id.toUpperCase()})`
+    if (!username) return `[MEMO ${id.toUpperCase()}]`
+    return `[MEMO](/@${encodeURIComponent(username)}/${id.toUpperCase()})`
   })
 }
 

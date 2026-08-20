@@ -4,7 +4,7 @@ import { db } from '#/db'
 import { memoReposts, memos, memoTags, user } from '#/db/schema'
 import { resolveAvatarUrl } from '#/lib/avatar'
 import { loadMemoCounts, loadViewerStates } from './interactions-core'
-import { loadMemoTags, toMemoWithTags } from './memos-core'
+import { loadMemoTags, resolveTagIds, toMemoWithTags } from './memos-core'
 import type { MemoWithTags } from './memos-core'
 import { loadMemoAuthors, resolveGlobalTagIds } from './timeline-core'
 import type { MemoAuthor, TimelineItem } from './timeline-core'
@@ -92,7 +92,12 @@ export async function getPublicProfileByUsername(
 
 export async function listPublicFeed(
   username: string,
-  opts: { cursor?: string; limit?: number; viewerId?: string | null } = {},
+  opts: {
+    cursor?: string
+    limit?: number
+    viewerId?: string | null
+    tag?: string
+  } = {},
 ): Promise<{ items: PublicFeedItem[]; nextCursor: string | null }> {
   const u = await findUserByUsername(username)
   if (!u) return { items: [], nextCursor: null }
@@ -112,6 +117,18 @@ export async function listPublicFeed(
     eq(memos.archived, false),
     isNull(memos.deletedAt),
   ]
+  if (opts.tag) {
+    const tagIds = await resolveTagIds(u.id, opts.tag)
+    if (tagIds.length === 0) return { items: [], nextCursor: null }
+    const taggedMemoIds = db
+      .select({ memoId: memoTags.memoId })
+      .from(memoTags)
+      .where(inArray(memoTags.tagId, tagIds))
+    memoConditions.push(inArray(memos.id, taggedMemoIds))
+    // A profile tag belongs to that profile, so it filters the profile's
+    // authored memos and does not accidentally match another user's repost.
+    repostConditions.push(eq(memos.id, ''))
+  }
   if (cur?.p === 0) {
     if (cur.k !== 'repost') {
       const cond = or(
