@@ -127,79 +127,84 @@ export const MemoCard = memoize(function MemoCard({
   }
 
   return (
-    <article className="min-w-0 rounded-xl bg-kumo-base px-5 py-4 ring ring-kumo-line">
-      {repost && (
-        <div className="mb-2.5 flex flex-wrap items-start gap-x-1.5 gap-y-0.5 text-xs text-kumo-subtle">
-          <span className="h-lh flex shrink-0 items-center">
-            <ArrowBendUpRight size={12} />
-          </span>
-          <span className="font-medium">转发了</span>
-          <button
-            type="button"
-            onClick={() => openProfile(repost.reposter)}
-            className="font-mono text-[0.9em] hover:text-kumo-default"
-          >
-            @{repost.reposter.username}
-          </button>
-          <span aria-hidden="true">·</span>
-          <time dateTime={repost.createdAt} className="font-mono text-[0.9em]">
-            {relativeTime(repost.createdAt)}
-          </time>
-        </div>
-      )}
-      {repost?.content && (
-        <div className="mb-3 rounded-lg bg-kumo-tint px-4 py-2.5 text-sm text-kumo-subtle">
-          <HashtagText content={repost.content} onTagClick={onTagClick} />
-        </div>
-      )}
-      {author && (
-        <div className="mb-3 flex items-center gap-2.5">
-          <Avatar
-            username={author.username}
-            image={author.image}
-            size={28}
-            className="shrink-0"
-          />
-          <div className="min-w-0 flex-1">
+    <article className="group relative min-w-0 overflow-hidden rounded-2xl bg-kumo-base ring ring-kumo-line hover:ring-accent/45 focus-within:ring-accent/60">
+      <div className="relative px-5 pb-3.5 pt-[18px] sm:px-6 sm:pb-4 sm:pt-5">
+        {repost && (
+          <div className="mb-3 flex flex-wrap items-start gap-x-1.5 gap-y-0.5 text-xs text-kumo-subtle">
+            <span className="h-lh flex shrink-0 items-center">
+              <ArrowBendUpRight size={12} />
+            </span>
+            <span className="font-medium">转发了</span>
             <button
               type="button"
-              onClick={() => openProfile(author)}
-              className="block max-w-full truncate text-left text-sm font-medium text-kumo-default hover:text-accent"
+              onClick={() => openProfile(repost.reposter)}
+              className="font-mono text-[0.9em] hover:text-kumo-default"
             >
-              {author.name}
+              @{repost.reposter.username}
             </button>
-            <button
-              type="button"
-              onClick={() => openProfile(author)}
-              className="block max-w-full truncate text-left font-mono text-xs text-kumo-subtle hover:text-accent"
+            <span aria-hidden="true">·</span>
+            <time
+              dateTime={repost.createdAt}
+              className="font-mono text-[0.9em]"
             >
-              @{author.username}
-            </button>
+              {relativeTime(repost.createdAt)}
+            </time>
           </div>
+        )}
+        {repost?.content && (
+          <div className="mb-3 rounded-lg bg-kumo-tint px-4 py-2.5 text-sm text-kumo-subtle">
+            <HashtagText content={repost.content} onTagClick={onTagClick} />
+          </div>
+        )}
+        {author && (
+          <div className="mb-4 flex items-center gap-2.5">
+            <Avatar
+              username={author.username}
+              image={author.image}
+              size={28}
+              className="shrink-0"
+            />
+            <div className="min-w-0 flex-1">
+              <button
+                type="button"
+                onClick={() => openProfile(author)}
+                className="block max-w-full truncate text-left text-sm font-medium text-kumo-default hover:text-accent"
+              >
+                {author.name}
+              </button>
+              <button
+                type="button"
+                onClick={() => openProfile(author)}
+                className="block max-w-full truncate text-left font-mono text-xs text-kumo-subtle hover:text-accent"
+              >
+                @{author.username}
+              </button>
+            </div>
+          </div>
+        )}
+        <div className="max-w-[52ch] text-[15px] leading-[1.75] text-kumo-strong sm:text-base sm:leading-[1.7]">
+          <HashtagText content={memo.content} onTagClick={onTagClick} />
         </div>
-      )}
-      <div className="text-sm leading-relaxed text-kumo-default">
-        <HashtagText content={memo.content} onTagClick={onTagClick} />
+
+        {(memo.globalPinned || (showUserPin && memo.pinned)) && (
+          <div className="mt-4 flex items-center gap-2.5">
+            {memo.globalPinned && (
+              <span className="flex items-center gap-1 text-xs text-accent">
+                <PushPin size={12} weight="fill" />
+                <span className="font-mono">全局置顶</span>
+              </span>
+            )}
+            {showUserPin && memo.pinned && (
+              <span className="flex items-center gap-1 text-xs text-kumo-subtle">
+                <PushPin size={12} weight="fill" />
+                <span className="font-mono">置顶</span>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
-      {(memo.globalPinned || (showUserPin && memo.pinned)) && (
-        <div className="mt-2.5 flex items-center gap-2.5">
-          {memo.globalPinned && (
-            <span className="flex items-center gap-1 text-xs text-accent">
-              <PushPin size={12} weight="fill" />
-              <span className="font-mono">全局置顶</span>
-            </span>
-          )}
-          {showUserPin && memo.pinned && (
-            <span className="flex items-center gap-1 text-xs text-kumo-subtle">
-              <PushPin size={12} weight="fill" />
-              <span className="font-mono">置顶</span>
-            </span>
-          )}
-        </div>
-      )}
-
-      <div className="mt-2.5 flex items-center justify-between gap-3 border-t border-kumo-line pt-2.5">
+      <div className="flex items-center justify-between gap-3 border-t border-kumo-line bg-kumo-tint/45 px-5 py-2.5 sm:px-6">
         {deleted ? (
           <span className="font-mono text-xs text-kumo-subtle">
             {memo.deletedAt
