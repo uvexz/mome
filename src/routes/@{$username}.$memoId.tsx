@@ -11,19 +11,12 @@ import {
   Loader,
   useKumoToastManager,
 } from '@cloudflare/kumo'
-import {
-  ArrowLeft,
-  GlobeSimple,
-  LockSimple,
-  PaperPlaneRight,
-  Trash,
-} from '@phosphor-icons/react'
+import { ArrowLeft, PaperPlaneRight, Trash } from '@phosphor-icons/react'
 
 import { authClient } from '#/lib/auth-client'
 import { relativeTime } from '#/lib/date'
 import { Avatar } from '#/components/avatar'
-import { HashtagText } from '#/components/hashtag-text'
-import { MemoInteractions } from '#/components/memo-interactions'
+import { MemoCard } from '#/components/memo-card'
 import { RepostDialog } from '#/components/repost-dialog'
 import {
   commentsQueryOptions,
@@ -200,7 +193,6 @@ function MemoPage() {
 
   // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- session 可能为 null
   const viewerId = session?.user?.id
-  const isAuthor = viewerId === detail.author.id
 
   return (
     <div className="min-h-dvh">
@@ -227,71 +219,18 @@ function MemoPage() {
       </header>
 
       <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-8">
-        <article className="rounded-xl bg-kumo-base px-5 py-4 ring ring-kumo-line">
-          <div className="mb-4 flex items-center gap-2.5">
-            <Avatar
-              username={detail.author.username}
-              image={detail.author.image}
-              size={36}
-            />
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-kumo-default">
-                {detail.author.name}
-              </p>
-              <p className="font-mono text-xs text-kumo-subtle">
-                @{detail.author.username}
-              </p>
-            </div>
-            <time
-              dateTime={memo.createdAt}
-              className="ml-auto shrink-0 font-mono text-xs text-kumo-subtle"
-            >
-              {relativeTime(memo.createdAt)}
-            </time>
-          </div>
-
-          <div className="text-sm leading-relaxed text-kumo-default">
-            <HashtagText
-              content={memo.content}
-              memoUsername={detail.author.username}
-            />
-          </div>
-
-          <div className="mt-3 flex items-center gap-2.5">
-            {memo.visibility === 'public' ? (
-              <span className="flex items-center gap-1 text-xs text-kumo-subtle">
-                <GlobeSimple size={12} weight="fill" />
-                <span className="font-mono">公开</span>
-              </span>
-            ) : (
-              <span className="flex items-center gap-1 text-xs text-kumo-inactive">
-                <LockSimple size={12} />
-                <span className="font-mono">仅自己可见</span>
-              </span>
-            )}
-            {isAuthor && memo.archived && (
-              <span className="font-mono text-xs text-kumo-subtle">已归档</span>
-            )}
-            {memo.tags.length > 0 && (
-              <span className="font-mono text-xs text-kumo-subtle">
-                {memo.tags.map((t) => t.name).join(' #')}
-              </span>
-            )}
-          </div>
-
-          <div className="mt-3 border-t border-kumo-line pt-2.5">
-            <MemoInteractions
-              memo={memo}
-              onLike={() => void handleLike()}
-              onFavorite={() => void handleFavorite()}
-              onComment={() => {
-                if (!requireLogin()) return
-                document.getElementById('memo-comment-input')?.focus()
-              }}
-              onRepost={() => void handleRepost()}
-            />
-          </div>
-        </article>
+        <MemoCard
+          memo={memo}
+          profileUsername={detail.author.username}
+          author={detail.author}
+          onLike={() => void handleLike()}
+          onFavorite={() => void handleFavorite()}
+          onComment={() => {
+            if (!requireLogin()) return
+            document.getElementById('memo-comment-input')?.focus()
+          }}
+          onRepost={() => void handleRepost()}
+        />
 
         <section className="mt-8" aria-label="评论">
           <h2 className="mb-3 font-mono text-xs text-kumo-subtle">
