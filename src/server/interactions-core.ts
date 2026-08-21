@@ -123,20 +123,6 @@ export async function loadViewerStates(
   return map
 }
 
-async function assertInteractionAllowed(
-  userId: string,
-  memoId: string,
-): Promise<void> {
-  const memo = await db.query.memos.findFirst({
-    where: and(eq(memos.id, memoId), isNull(memos.deletedAt)),
-    columns: { id: true, userId: true, visibility: true },
-  })
-  if (!memo) throw new Error('memo not found')
-  if (memo.visibility !== 'public' && memo.userId !== userId) {
-    throw new Error('memo is not public')
-  }
-}
-
 /** 事务内为互动写入通知（对方 memo 才通知，重复事件幂等） */
 async function insertNotificationInTx(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
@@ -187,7 +173,6 @@ export async function toggleLikeForUser(
   userId: string,
   memoId: string,
 ): Promise<{ liked: boolean; counts: MemoCounts }> {
-  await assertInteractionAllowed(userId, memoId)
   // 查重 + 写入 + 通知在同一事务内，并发双击只会得到确定性的 toggle 序列，
   // 不会因主键冲突抛 500，也不会出现"互动成功但通知失败"的不一致
   const liked = await db.transaction(async (tx) => {
@@ -201,7 +186,16 @@ export async function toggleLikeForUser(
       await deleteNotificationInTx(tx, userId, memoId, 'like')
       return false
     }
-    await tx.insert(memoLikes).values({ memoId, userId, createdAt: new Date() })
+    const inserted = await tx.all(sql`
+      INSERT INTO ${memoLikes} (memo_id, user_id, created_at)
+      SELECT ${memos.id}, ${userId}, ${Date.now()}
+      FROM ${memos}
+      WHERE ${memos.id} = ${memoId}
+        AND ${memos.deletedAt} IS NULL
+        AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
+      RETURNING memo_id
+    `)
+    if (inserted.length !== 1) throw new Error('memo not found or not public')
     await insertNotificationInTx(tx, userId, memoId, 'like')
     return true
   })
@@ -213,7 +207,6 @@ export async function toggleFavoriteForUser(
   userId: string,
   memoId: string,
 ): Promise<{ favorited: boolean; counts: MemoCounts }> {
-  await assertInteractionAllowed(userId, memoId)
   const favorited = await db.transaction(async (tx) => {
     const existing = await tx.query.memoFavorites.findFirst({
       where: and(
@@ -232,9 +225,16 @@ export async function toggleFavoriteForUser(
         )
       return false
     }
-    await tx
-      .insert(memoFavorites)
-      .values({ memoId, userId, createdAt: new Date() })
+    const inserted = await tx.all(sql`
+      INSERT INTO ${memoFavorites} (memo_id, user_id, created_at)
+      SELECT ${memos.id}, ${userId}, ${Date.now()}
+      FROM ${memos}
+      WHERE ${memos.id} = ${memoId}
+        AND ${memos.deletedAt} IS NULL
+        AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
+      RETURNING memo_id
+    `)
+    if (inserted.length !== 1) throw new Error('memo not found or not public')
     return true
   })
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
@@ -246,7 +246,6 @@ export async function toggleRepostForUser(
   memoId: string,
   content?: string,
 ): Promise<{ reposted: boolean; counts: MemoCounts }> {
-  await assertInteractionAllowed(userId, memoId)
   const reposted = await db.transaction(async (tx) => {
     const existing = await tx.query.memoReposts.findFirst({
       where: and(
@@ -263,12 +262,16 @@ export async function toggleRepostForUser(
       await deleteNotificationInTx(tx, userId, memoId, 'repost')
       return false
     }
-    await tx.insert(memoReposts).values({
-      memoId,
-      userId,
-      content: content?.trim() || null,
-      createdAt: new Date(),
-    })
+    const inserted = await tx.all(sql`
+      INSERT INTO ${memoReposts} (memo_id, user_id, content, created_at)
+      SELECT ${memos.id}, ${userId}, ${content?.trim() || null}, ${Date.now()}
+      FROM ${memos}
+      WHERE ${memos.id} = ${memoId}
+        AND ${memos.deletedAt} IS NULL
+        AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
+      RETURNING memo_id
+    `)
+    if (inserted.length !== 1) throw new Error('memo not found or not public')
     await insertNotificationInTx(tx, userId, memoId, 'repost')
     return true
   })
@@ -281,11 +284,21 @@ export async function updateRepostForUser(
   memoId: string,
   content?: string,
 ): Promise<{ reposted: boolean; counts: MemoCounts }> {
-  await assertInteractionAllowed(userId, memoId)
   const res = await db
     .update(memoReposts)
     .set({ content: content?.trim() || null })
-    .where(and(eq(memoReposts.memoId, memoId), eq(memoReposts.userId, userId)))
+    .where(
+      and(
+        eq(memoReposts.memoId, memoId),
+        eq(memoReposts.userId, userId),
+        sql`EXISTS (
+          SELECT 1 FROM ${memos}
+          WHERE ${memos.id} = ${memoId}
+            AND ${memos.deletedAt} IS NULL
+            AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
+        )`,
+      ),
+    )
     .returning()
   if (res.length === 0) {
     throw new Error('repost not found')
@@ -299,19 +312,21 @@ export async function addCommentForUser(
   memoId: string,
   content: string,
 ): Promise<{ comment: CommentItem; counts: MemoCounts }> {
-  await assertInteractionAllowed(userId, memoId)
   const now = new Date()
   const id = ulid()
   // 评论与通知写入同一事务，避免"评论成功但通知丢失"的不一致
   await db.transaction(async (tx) => {
-    await tx.insert(memoComments).values({
-      id,
-      memoId,
-      userId,
-      content,
-      createdAt: now,
-      updatedAt: now,
-    })
+    const inserted = await tx.all(sql`
+      INSERT INTO ${memoComments}
+        (id, memo_id, user_id, content, created_at, updated_at)
+      SELECT ${id}, ${memos.id}, ${userId}, ${content}, ${now.getTime()}, ${now.getTime()}
+      FROM ${memos}
+      WHERE ${memos.id} = ${memoId}
+        AND ${memos.deletedAt} IS NULL
+        AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
+      RETURNING id
+    `)
+    if (inserted.length !== 1) throw new Error('memo not found or not public')
     await insertNotificationInTx(tx, userId, memoId, 'comment', id)
   })
   const row = await db

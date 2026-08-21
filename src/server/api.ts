@@ -73,9 +73,12 @@ function bearerToken(request: Request): string | null {
 }
 
 /** 限流异常转 429（rateLimitOrThrow 抛的是普通 Error） */
-function rateLimit(key: string, opts: { window: number; max: number }): void {
+async function rateLimit(
+  key: string,
+  opts: { window: number; max: number },
+): Promise<void> {
   try {
-    rateLimitOrThrow(key, opts)
+    await rateLimitOrThrow(key, opts)
   } catch (error) {
     throw new ApiError(
       'rate_limited',
@@ -90,7 +93,7 @@ export async function requireApiKey(request: Request): Promise<ApiKeyUser> {
   const token = bearerToken(request)
   if (!token) {
     // 缺失/无效凭据按 IP 限流（防枚举与 DB 压力）
-    rateLimit(`v1:auth-fail:${ip}`, { window: 60, max: 30 })
+    await rateLimit(`v1:auth-fail:${ip}`, { window: 60, max: 30 })
     throw new ApiError(
       'unauthorized',
       '缺少 Authorization 头，请使用 Bearer <API key>',
@@ -99,12 +102,12 @@ export async function requireApiKey(request: Request): Promise<ApiKeyUser> {
   }
   const apiUser = await authenticateApiKeyToken(token)
   if (!apiUser) {
-    rateLimit(`v1:auth-fail:${ip}`, { window: 60, max: 30 })
+    await rateLimit(`v1:auth-fail:${ip}`, { window: 60, max: 30 })
     throw new ApiError('invalid_api_key', 'API key 无效、已过期或已撤销', 401)
   }
   // 有效 key 按方法限流（读 120/分、写 60/分），防止 key 泄漏后被无限滥用
   const isWrite = request.method !== 'GET' && request.method !== 'HEAD'
-  rateLimit(`v1:key:${apiUser.id}:${isWrite ? 'write' : 'read'}`, {
+  await rateLimit(`v1:key:${apiUser.id}:${isWrite ? 'write' : 'read'}`, {
     window: 60,
     max: isWrite ? 60 : 120,
   })

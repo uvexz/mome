@@ -16,10 +16,7 @@ import {
   deleteMemoForUser,
   getMemoForUser,
   MAX_CONTENT,
-  setArchiveForUser,
-  setPinForUser,
-  setVisibilityForUser,
-  updateMemoForUser,
+  patchMemoForUser,
 } from '#/server/memos-core'
 
 const updateMemoSchema = z
@@ -63,28 +60,16 @@ export const Route = createFileRoute('/v1/memos/$memoId')({
           const user = await requireApiKey(request)
           const parsed = updateMemoSchema.safeParse(await readJsonBody(request))
           if (!parsed.success) return validationError(parsed.error)
-          const { content, visibility, pinned, archived } = parsed.data
-
           try {
-            if (content !== undefined) {
-              await updateMemoForUser(user.id, params.memoId, content)
-            }
-            if (visibility !== undefined) {
-              await setVisibilityForUser(user.id, params.memoId, visibility)
-            }
-            if (pinned !== undefined) {
-              await setPinForUser(user.id, params.memoId, pinned)
-            }
-            if (archived !== undefined) {
-              await setArchiveForUser(user.id, params.memoId, archived)
-            }
+            return apiJson(
+              await patchMemoForUser(user.id, params.memoId, parsed.data),
+            )
           } catch (error) {
             if (error instanceof Error && error.message === 'memo not found') {
               throw new ApiError('memo_not_found', 'memo 不存在', 404)
             }
             throw error
           }
-          return apiJson(await getMemoForUser(user.id, params.memoId))
         } catch (error) {
           return handleApiError(error)
         }

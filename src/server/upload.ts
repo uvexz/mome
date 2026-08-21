@@ -51,17 +51,17 @@ export const getUploadUrl = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }): Promise<UploadUrlResult> => {
     // 配额：单用户每小时 30 次 + 每日 100 次；全站按 IP 每小时 300 次封顶，
     // 防止开放注册时批量注册账号对 S3 造成存储/流量费用 DoS
-    rateLimitOrThrow(`upload:${context.user.id}`, {
+    await rateLimitOrThrow(`upload:${context.user.id}`, {
       window: 3600,
       max: 30,
       message: '上传过于频繁，请稍后再试',
     })
-    rateLimitOrThrow(`upload-day:${context.user.id}`, {
+    await rateLimitOrThrow(`upload-day:${context.user.id}`, {
       window: 86400,
       max: 100,
       message: '今日上传次数已达上限',
     })
-    rateLimitOrThrow(`upload:global:${clientIp()}`, {
+    await rateLimitOrThrow(`upload:global:${clientIp()}`, {
       window: 3600,
       max: 300,
       message: '上传过于频繁，请稍后再试',

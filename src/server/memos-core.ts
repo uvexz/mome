@@ -95,95 +95,138 @@ export function toMemoWithTags(
   }
 }
 
-// 在事务内同步标签：按 content 解析 → find-or-create → 写 memo_tags
-async function syncTagsForContent(
+async function syncRelationsForContent(
   tx: Tx,
   userId: string,
   memoId: string,
   content: string,
 ): Promise<void> {
-  const paths = parseHashtags(content)
-
-  // 先清掉旧的关联
   await tx.delete(memoTags).where(eq(memoTags.memoId, memoId))
-
-  for (const path of paths) {
-    const segments = tagPathToSegments(path)
-    let parentId: string | null = null
-    for (const seg of segments) {
-      const cond: SQL | undefined =
-        parentId === null
-          ? and(
-              eq(tags.userId, userId),
-              eq(tags.name, seg),
-              isNull(tags.parentId),
-            )
-          : and(
-              eq(tags.userId, userId),
-              eq(tags.name, seg),
-              eq(tags.parentId, parentId),
-            )
-      let tag: typeof tags.$inferSelect | undefined =
-        await tx.query.tags.findFirst({
-          where: cond,
-        })
-      if (!tag) {
-        const id = crypto.randomUUID()
-        await tx.insert(tags).values({
-          id,
-          userId,
-          name: seg,
-          parentId,
-          createdAt: new Date(),
-        })
-        tag = {
-          id,
-          userId,
-          name: seg,
-          parentId,
-          parentKey: parentId ?? '',
-          createdAt: new Date(),
-        }
-      }
-      parentId = tag.id
-    }
-    if (parentId) {
-      await tx
-        .insert(memoTags)
-        .values({ memoId, tagId: parentId })
-        .onConflictDoNothing()
-    }
-  }
+  await tx.delete(memoLinks).where(eq(memoLinks.sourceId, memoId))
+  await syncImportedRelations(tx, userId, [{ id: memoId, content }])
 }
 
-async function syncLinksForContent(
+function chunks<T>(items: T[], size = 250): T[][] {
+  const result: T[][] = []
+  for (let i = 0; i < items.length; i += size) {
+    result.push(items.slice(i, i + size))
+  }
+  return result
+}
+
+async function syncImportedRelations(
   tx: Tx,
   userId: string,
-  memoId: string,
-  content: string,
+  imported: Array<{ id: string; content: string }>,
 ): Promise<void> {
-  await tx.delete(memoLinks).where(eq(memoLinks.sourceId, memoId))
-  const referencedIds = parseMemoReferences(content).filter(
-    (id) => id !== memoId,
-  )
-  if (referencedIds.length === 0) return
+  if (imported.length === 0) return
 
-  const targets = await tx
-    .select({ id: memos.id })
-    .from(memos)
-    .where(
-      and(
-        eq(memos.userId, userId),
-        isNull(memos.deletedAt),
-        inArray(memos.id, referencedIds),
-      ),
+  const pathsByMemo = imported.map((memo) => ({
+    id: memo.id,
+    paths: parseHashtags(memo.content).map(tagPathToSegments),
+  }))
+  const maxDepth = Math.max(
+    0,
+    ...pathsByMemo.flatMap((memo) => memo.paths.map((path) => path.length)),
+  )
+  const tagIdByPath = new Map<string, string>()
+
+  for (let depth = 0; depth < maxDepth; depth++) {
+    const candidates = new Map<
+      string,
+      { id: string; name: string; parentId: string | null }
+    >()
+    for (const memo of pathsByMemo) {
+      for (const path of memo.paths) {
+        if (path.length <= depth) continue
+        const pathKey = path.slice(0, depth + 1).join('\0')
+        const parentId =
+          depth === 0 ? null : tagIdByPath.get(path.slice(0, depth).join('\0'))
+        if (parentId === undefined) throw new Error('tag parent not found')
+        if (!candidates.has(pathKey)) {
+          candidates.set(pathKey, {
+            id: crypto.randomUUID(),
+            name: path[depth],
+            parentId,
+          })
+        }
+      }
+    }
+    for (const batch of chunks([...candidates.values()])) {
+      await tx
+        .insert(tags)
+        .values(
+          batch.map((tag) => ({
+            ...tag,
+            userId,
+            createdAt: new Date(),
+          })),
+        )
+        .onConflictDoNothing()
+    }
+    const storedTags = await tx
+      .select()
+      .from(tags)
+      .where(eq(tags.userId, userId))
+    const storedByParentAndName = new Map(
+      storedTags.map((tag) => [`${tag.parentId ?? ''}\0${tag.name}`, tag.id]),
     )
+    for (const [pathKey, candidate] of candidates) {
+      const storedId = storedByParentAndName.get(
+        `${candidate.parentId ?? ''}\0${candidate.name}`,
+      )
+      if (!storedId) throw new Error('tag create conflict')
+      tagIdByPath.set(pathKey, storedId)
+    }
+  }
+
+  const memoTagValues: Array<typeof memoTags.$inferInsert> = []
+  const memoTagKeys = new Set<string>()
+  for (const memo of pathsByMemo) {
+    for (const path of memo.paths) {
+      const tagId = tagIdByPath.get(path.join('\0'))
+      if (tagId) {
+        const key = `${memo.id}\0${tagId}`
+        if (!memoTagKeys.has(key)) {
+          memoTagKeys.add(key)
+          memoTagValues.push({ memoId: memo.id, tagId })
+        }
+      }
+    }
+  }
+  for (const batch of chunks(memoTagValues)) {
+    await tx.insert(memoTags).values(batch).onConflictDoNothing()
+  }
+
+  const references = new Map(
+    imported.map((memo) => [
+      memo.id,
+      parseMemoReferences(memo.content).filter((id) => id !== memo.id),
+    ]),
+  )
+  const targetIds = [...new Set([...references.values()].flat())]
+  const validTargetIds = new Set<string>()
+  for (const batch of chunks(targetIds, 500)) {
+    const targets = await tx
+      .select({ id: memos.id })
+      .from(memos)
+      .where(
+        and(
+          eq(memos.userId, userId),
+          isNull(memos.deletedAt),
+          inArray(memos.id, batch),
+        ),
+      )
+    for (const target of targets) validTargetIds.add(target.id)
+  }
   const now = new Date()
-  for (const target of targets) {
-    await tx
-      .insert(memoLinks)
-      .values({ sourceId: memoId, targetId: target.id, createdAt: now })
-      .onConflictDoNothing()
+  const links = [...references].flatMap(([sourceId, ids]) =>
+    ids
+      .filter((targetId) => validTargetIds.has(targetId))
+      .map((targetId) => ({ sourceId, targetId, createdAt: now })),
+  )
+  for (const batch of chunks(links)) {
+    await tx.insert(memoLinks).values(batch).onConflictDoNothing()
   }
 }
 
@@ -255,25 +298,6 @@ export async function createMemoForUser(
   content: string,
   opts: { visibility?: 'public' | 'private'; clientId?: string } = {},
 ): Promise<MemoWithTags> {
-  if (opts.clientId) {
-    const existing = await db.query.memos.findFirst({
-      where: and(eq(memos.userId, userId), eq(memos.clientId, opts.clientId)),
-    })
-    if (existing) {
-      const [tagRows, countsMap, viewerMap] = await Promise.all([
-        loadMemoTags([existing.id]),
-        loadMemoCounts([existing.id]),
-        loadViewerStates([existing.id], userId),
-      ])
-      return toMemoWithTags(
-        existing,
-        tagRows,
-        countsMap.get(existing.id),
-        viewerMap.get(existing.id),
-      )
-    }
-  }
-
   const now = new Date()
   const memo = {
     id: ulid(),
@@ -289,18 +313,38 @@ export async function createMemoForUser(
     updatedAt: now,
   }
 
-  await db.transaction(async (tx) => {
-    await tx.insert(memos).values(memo)
-    await syncTagsForContent(tx, userId, memo.id, content)
-    await syncLinksForContent(tx, userId, memo.id, content)
-    await cleanupOrphanTags(tx, userId)
+  const saved = await db.transaction(async (tx) => {
+    const inserted = await tx
+      .insert(memos)
+      .values(memo)
+      .onConflictDoNothing()
+      .returning()
+    if (inserted.length === 0) {
+      const existing = opts.clientId
+        ? await tx.query.memos.findFirst({
+            where: and(
+              eq(memos.userId, userId),
+              eq(memos.clientId, opts.clientId),
+            ),
+          })
+        : undefined
+      if (!existing) throw new Error('memo create conflict')
+      return existing
+    }
+    await syncRelationsForContent(tx, userId, memo.id, content)
+    return inserted[0]
   })
 
+  const [tagRows, countsMap, viewerMap] = await Promise.all([
+    loadMemoTags([saved.id]),
+    loadMemoCounts([saved.id]),
+    loadViewerStates([saved.id], userId),
+  ])
   return toMemoWithTags(
-    memo,
-    await loadMemoTags([memo.id]),
-    EMPTY_COUNTS,
-    EMPTY_VIEWER_STATE,
+    saved,
+    tagRows,
+    countsMap.get(saved.id),
+    viewerMap.get(saved.id),
   )
 }
 
@@ -531,6 +575,19 @@ export async function updateMemoForUser(
   id: string,
   content: string,
 ): Promise<MemoWithTags> {
+  return patchMemoForUser(userId, id, { content })
+}
+
+export async function patchMemoForUser(
+  userId: string,
+  id: string,
+  patch: {
+    content?: string
+    visibility?: 'public' | 'private'
+    pinned?: boolean
+    archived?: boolean
+  },
+): Promise<MemoWithTags> {
   const now = new Date()
 
   await db.transaction(async (tx) => {
@@ -542,19 +599,37 @@ export async function updateMemoForUser(
       ),
     })
     if (!current) throw new Error('memo not found')
-    if (current.content === content) {
-      return
+    const contentChanged =
+      patch.content !== undefined && patch.content !== current.content
+    if (contentChanged) {
+      await tx.insert(memoVersions).values({
+        id: ulid(),
+        userId,
+        memoId: id,
+        content: current.content,
+        createdAt: now,
+      })
     }
-    await tx.insert(memoVersions).values({
-      id: ulid(),
-      userId,
-      memoId: id,
-      content: current.content,
-      createdAt: now,
-    })
+    if (patch.pinned === true && !current.pinned) {
+      await tx
+        .update(memos)
+        .set({ pinned: false, updatedAt: now })
+        .where(and(eq(memos.userId, userId), eq(memos.pinned, true)))
+    }
     const updated = await tx
       .update(memos)
-      .set({ content, updatedAt: now })
+      .set({
+        ...(patch.content !== undefined ? { content: patch.content } : {}),
+        ...(patch.visibility !== undefined
+          ? { visibility: patch.visibility }
+          : {}),
+        ...(patch.pinned !== undefined ? { pinned: patch.pinned } : {}),
+        ...(patch.archived !== undefined ? { archived: patch.archived } : {}),
+        ...(patch.visibility === 'private' || patch.archived === true
+          ? { globalPinned: false }
+          : {}),
+        updatedAt: now,
+      })
       .where(
         and(
           eq(memos.id, id),
@@ -564,9 +639,10 @@ export async function updateMemoForUser(
       )
       .returning()
     if (updated.length === 0) throw new Error('memo not found')
-    await syncTagsForContent(tx, userId, id, content)
-    await syncLinksForContent(tx, userId, id, content)
-    await cleanupOrphanTags(tx, userId)
+    if (contentChanged) {
+      await syncRelationsForContent(tx, userId, id, patch.content!)
+      await cleanupOrphanTags(tx, userId)
+    }
   })
 
   return getMemoForUser(userId, id)
@@ -1099,34 +1175,27 @@ export async function importMemosForUser(
   userId: string,
   items: MemoImportItem[],
 ): Promise<{ imported: number; skipped: number }> {
-  let imported = 0
   let skipped = 0
-  let requestedPinId: string | null = null
-  const candidateIds = items
-    .map((i) => i.id)
-    .filter((x): x is string => Boolean(x))
-  const existingIds = new Set(
-    (
-      await db
-        .select({ id: memos.id })
-        .from(memos)
-        .where(inArray(memos.id, candidateIds))
-    ).map((r) => r.id),
-  )
-
-  await db.transaction(async (tx) => {
-    for (const item of items) {
-      if (item.id && existingIds.has(item.id)) {
-        skipped++
-        continue
-      }
-      const createdAt = new Date(item.createdAt ?? '')
-      const updatedAt = new Date(item.updatedAt ?? '')
-      const createdAtValue = Number.isNaN(createdAt.getTime())
-        ? new Date()
-        : createdAt
-      const id = item.id || ulid()
-      await tx.insert(memos).values({
+  const seenIds = new Set<string>()
+  const prepared: Array<{
+    item: MemoImportItem
+    memo: typeof memos.$inferInsert
+  }> = []
+  for (const item of items) {
+    const id = item.id || ulid()
+    if (seenIds.has(id)) {
+      skipped++
+      continue
+    }
+    seenIds.add(id)
+    const createdAt = new Date(item.createdAt ?? '')
+    const updatedAt = new Date(item.updatedAt ?? '')
+    const createdAtValue = Number.isNaN(createdAt.getTime())
+      ? new Date()
+      : createdAt
+    prepared.push({
+      item,
+      memo: {
         id,
         userId,
         content: item.content,
@@ -1135,16 +1204,34 @@ export async function importMemosForUser(
         archived: item.archived,
         createdAt: createdAtValue,
         updatedAt:
-          Number.isNaN(updatedAt.getTime()) || updatedAt < createdAt
+          Number.isNaN(updatedAt.getTime()) || updatedAt < createdAtValue
             ? createdAtValue
             : updatedAt,
-      })
-      // 复用标签同步逻辑（基于 content 重新解析，忽略导出文件里的 tags 字段）
-      await syncTagsForContent(tx, userId, id, item.content)
-      await syncLinksForContent(tx, userId, id, item.content)
-      if (item.pinned) requestedPinId = id
-      imported++
+      },
+    })
+  }
+
+  const imported = await db.transaction(async (tx) => {
+    const insertedIds = new Set<string>()
+    for (const batch of chunks(prepared)) {
+      const inserted = await tx
+        .insert(memos)
+        .values(batch.map(({ memo }) => memo))
+        .onConflictDoNothing()
+        .returning({ id: memos.id })
+      for (const row of inserted) insertedIds.add(row.id)
     }
+    const accepted = prepared.filter(({ memo }) => insertedIds.has(memo.id))
+    skipped += prepared.length - accepted.length
+    await syncImportedRelations(
+      tx,
+      userId,
+      accepted.map(({ memo }) => ({ id: memo.id, content: memo.content })),
+    )
+
+    const requestedPinId = [...accepted]
+      .reverse()
+      .find(({ item }) => item.pinned)?.memo.id
     if (requestedPinId) {
       await tx
         .update(memos)
@@ -1156,6 +1243,7 @@ export async function importMemosForUser(
         .where(and(eq(memos.id, requestedPinId), eq(memos.userId, userId)))
     }
     await cleanupOrphanTags(tx, userId)
+    return accepted.length
   })
   return { imported, skipped }
 }
@@ -1186,8 +1274,10 @@ export async function getStatsForUser(
       ),
     )
   // 连续记录天数：从最近一条往前数，要求每天（本地时区）至少一条
+  const modifier = `${-tzOffsetMinutes} minutes`
+  const localDay = sql<string>`strftime('%Y-%m-%d', ${memos.createdAt} / 1000, 'unixepoch', ${modifier})`
   const days = await db
-    .select({ createdAt: memos.createdAt })
+    .selectDistinct({ day: localDay })
     .from(memos)
     .where(
       and(
@@ -1196,11 +1286,8 @@ export async function getStatsForUser(
         isNull(memos.deletedAt),
       ),
     )
-    .orderBy(desc(memos.createdAt))
-    .limit(3650)
-  const daySet = new Set(
-    days.map((d) => localDayKey(d.createdAt.getTime(), tzOffsetMinutes)),
-  )
+    .orderBy(desc(localDay))
+  const daySet = new Set(days.map((d) => d.day))
   let streak = 0
   let cursor = Date.now()
   while (daySet.has(localDayKey(cursor, tzOffsetMinutes))) {

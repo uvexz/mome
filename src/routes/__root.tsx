@@ -5,6 +5,7 @@ import {
   Scripts,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
 } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
@@ -54,11 +55,20 @@ export const Route = createRootRouteWithContext<RouterContext>()({
 })
 
 function RootComponent() {
+  const isLoading = useRouterState({
+    select: (state) => state.status === 'pending',
+  })
+
   return (
-    <QuerySessionBoundary>
-      <Outlet />
-      {import.meta.env.DEV && <DeveloperTools />}
-    </QuerySessionBoundary>
+    <>
+      {isLoading && (
+        <div className="page-loading-progress" aria-hidden="true" />
+      )}
+      <QuerySessionBoundary>
+        <Outlet />
+        {import.meta.env.DEV && <DeveloperTools />}
+      </QuerySessionBoundary>
+    </>
   )
 }
 

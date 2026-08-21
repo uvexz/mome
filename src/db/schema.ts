@@ -10,10 +10,16 @@ import {
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 
 // ── better-auth 四表（由 @better-auth/cli 生成）──────────────
-import { account, session, user, verification } from './auth-schema.ts'
+import {
+  account,
+  rateLimit,
+  session,
+  user,
+  verification,
+} from './auth-schema.ts'
 
 export * from './auth-schema.ts'
-export { account, session, user, verification }
+export { account, rateLimit, session, user, verification }
 
 // ── memos ────────────────────────────────────────────────
 export const memos = sqliteTable(
@@ -41,6 +47,15 @@ export const memos = sqliteTable(
   },
   (t) => [
     index('memos_user_created_idx').on(t.userId, t.createdAt),
+    index('memos_user_active_timeline_idx').on(
+      t.userId,
+      t.archived,
+      t.deletedAt,
+      t.pinned,
+      t.createdAt,
+      t.id,
+    ),
+    index('memos_user_deleted_idx').on(t.userId, t.deletedAt, t.id),
     uniqueIndex('memos_user_client_unique_idx')
       .on(t.userId, t.clientId)
       .where(sql`${t.clientId} IS NOT NULL`),
@@ -82,7 +97,7 @@ export const memoLikes = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.memoId, t.userId] }),
     index('memo_likes_memo_idx').on(t.memoId),
-    index('memo_likes_user_idx').on(t.userId),
+    index('memo_likes_user_created_idx').on(t.userId, t.createdAt, t.memoId),
   ],
 )
 
@@ -100,7 +115,11 @@ export const memoFavorites = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.memoId, t.userId] }),
     index('memo_favorites_memo_idx').on(t.memoId),
-    index('memo_favorites_user_idx').on(t.userId),
+    index('memo_favorites_user_created_idx').on(
+      t.userId,
+      t.createdAt,
+      t.memoId,
+    ),
   ],
 )
 
@@ -120,7 +139,7 @@ export const memoComments = sqliteTable(
   },
   (t) => [
     index('memo_comments_memo_created_idx').on(t.memoId, t.createdAt),
-    index('memo_comments_user_idx').on(t.userId),
+    index('memo_comments_user_created_idx').on(t.userId, t.createdAt, t.id),
   ],
 )
 
@@ -140,7 +159,7 @@ export const memoReposts = sqliteTable(
   (t) => [
     primaryKey({ columns: [t.memoId, t.userId] }),
     index('memo_reposts_memo_idx').on(t.memoId),
-    index('memo_reposts_user_created_idx').on(t.userId, t.createdAt),
+    index('memo_reposts_user_created_idx').on(t.userId, t.createdAt, t.memoId),
   ],
 )
 
@@ -173,6 +192,7 @@ export const notifications = sqliteTable(
     ),
     index('notifications_user_created_idx').on(t.userId, t.createdAt),
     index('notifications_user_read_idx').on(t.userId, t.readAt),
+    index('notifications_user_id_idx').on(t.userId, t.id),
   ],
 )
 
@@ -367,6 +387,12 @@ export const siteSettings = sqliteTable('site_settings', {
   key: text('key').primaryKey(),
   value: text('value').notNull(),
   updatedAt: integer('updated_at', { mode: 'timestamp_ms' }).notNull(),
+})
+
+export const rateLimitBuckets = sqliteTable('rate_limit_buckets', {
+  key: text('key').primaryKey(),
+  count: integer('count').notNull(),
+  resetAt: integer('reset_at', { mode: 'timestamp_ms' }).notNull(),
 })
 
 // ── 管理员（首位管理员由 AdminToken 领取，之后可互设） ───

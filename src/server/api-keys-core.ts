@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull, lt, or } from 'drizzle-orm'
 
 import { db } from '#/db'
 import { apiKeys, user } from '#/db/schema'
@@ -107,12 +107,26 @@ export async function authenticateApiKeyToken(
   if (row.key.expiresAt && row.key.expiresAt.getTime() <= Date.now()) {
     return null
   }
-  // 更新最近使用时间（无需阻塞业务响应）
-  void db
-    .update(apiKeys)
-    .set({ lastUsedAt: new Date() })
-    .where(eq(apiKeys.id, row.key.id))
-    .catch(() => {})
+  const now = new Date()
+  const cutoff = new Date(now.getTime() - 10 * 60 * 1000)
+  if (!row.key.lastUsedAt || row.key.lastUsedAt <= cutoff) {
+    try {
+      await db
+        .update(apiKeys)
+        .set({ lastUsedAt: now })
+        .where(
+          and(
+            eq(apiKeys.id, row.key.id),
+            or(isNull(apiKeys.lastUsedAt), lt(apiKeys.lastUsedAt, cutoff)),
+          ),
+        )
+    } catch (error) {
+      console.error('[api-key] 更新 lastUsedAt 失败', {
+        keyId: row.key.id,
+        error,
+      })
+    }
+  }
   return {
     id: row.user.id,
     username: row.user.username,

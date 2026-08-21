@@ -82,6 +82,31 @@
   color-scheme: dark;
 }
 
+/* 路由切换时显示在视口顶部，不占用页面布局空间。 */
+.page-loading-progress {
+  position: fixed;
+  z-index: 9999;
+  inset: 0 0 auto;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--color-accent);
+  transform-origin: left;
+  animation: page-loading-progress 1s ease-in-out infinite;
+}
+
+@keyframes page-loading-progress {
+  0% {
+    transform: scaleX(0);
+  }
+  50% {
+    transform: scaleX(0.65);
+  }
+  100% {
+    transform: scaleX(1);
+  }
+}
+
 /* 发丝级分隔线工具 */
 @utility hairline {
   @apply ring ring-kumo-line;

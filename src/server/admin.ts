@@ -1,5 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
-import { count, desc, eq, isNull } from 'drizzle-orm'
+import { count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
@@ -7,6 +7,7 @@ import { db } from '#/db'
 import { adminUsers, memos, siteSettings, user } from '#/db/schema'
 import { auth } from '#/lib/auth'
 
+import { claimFirstAdminForUser, removeAdminForUser } from './admin-core'
 import { adminMiddleware, authMiddleware } from './middleware'
 import { clientIp, rateLimitOrThrow } from './rate-limit'
 import { encryptSettingValue } from './secure-settings'
@@ -14,7 +15,6 @@ import { toggleGlobalPinForAdmin } from './memos-core'
 import { getSessionUserFromRequest } from './session-core'
 import {
   hasAnyAdmin,
-  invalidateSettingsCache,
   isAdminUser,
   loadEmailSettings,
   loadSiteSettings,
@@ -53,19 +53,16 @@ export const claimAdmin = createServerFn({ method: 'POST' })
   .validator(z.object({ token: z.string().min(1).max(1024) }))
   .handler(async ({ data, context }): Promise<{ success: boolean }> => {
     // 防 ADMIN_TOKEN 爆破：全局按 IP 封顶，防止注册多账号换桶绕过
-    rateLimitOrThrow(`claim-admin:global:${clientIp()}`, {
+    await rateLimitOrThrow(`claim-admin:global:${clientIp()}`, {
       window: 60,
       max: 10,
       message: '尝试过于频繁，请稍后再试',
     })
-    rateLimitOrThrow(`claim-admin:${context.user.id}:${clientIp()}`, {
+    await rateLimitOrThrow(`claim-admin:${context.user.id}:${clientIp()}`, {
       window: 60,
       max: 5,
       message: '尝试过于频繁，请稍后再试',
     })
-    if (await hasAnyAdmin()) {
-      throw new Error('站点已有管理员')
-    }
     const expected = process.env.ADMIN_TOKEN
     if (!expected) {
       throw new Error('未配置 ADMIN_TOKEN 环境变量')
@@ -73,14 +70,9 @@ export const claimAdmin = createServerFn({ method: 'POST' })
     if (!safeEqual(data.token, expected)) {
       throw new Error('AdminToken 不正确')
     }
-    // 领取后再检查一次，避免并发创建
-    if (await hasAnyAdmin()) {
+    if (!(await claimFirstAdminForUser(context.user.id))) {
       throw new Error('站点已有管理员')
     }
-    await db
-      .insert(adminUsers)
-      .values({ userId: context.user.id, createdAt: new Date() })
-      .onConflictDoNothing()
     return { success: true }
   })
 
@@ -276,24 +268,33 @@ export const saveSiteSettings = createServerFn({ method: 'POST' })
       ['resend_from', data.resend.from],
     ]
 
-    await Promise.all(entries.map(([key, value]) => setSetting(key, value)))
-    invalidateSettingsCache()
+    const emptyKeys = entries
+      .filter(([, value]) => value === '')
+      .map(([key]) => key)
+    const values = entries
+      .filter(([, value]) => value !== '')
+      .map(([key, value]) => ({ key, value, updatedAt: new Date() }))
+    await db.transaction(async (tx) => {
+      if (emptyKeys.length > 0) {
+        await tx
+          .delete(siteSettings)
+          .where(inArray(siteSettings.key, emptyKeys))
+      }
+      if (values.length > 0) {
+        await tx
+          .insert(siteSettings)
+          .values(values)
+          .onConflictDoUpdate({
+            target: siteSettings.key,
+            set: {
+              value: sql`excluded.value`,
+              updatedAt: sql`excluded.updated_at`,
+            },
+          })
+      }
+    })
     return { success: true }
   })
-
-async function setSetting(key: string, value: string): Promise<void> {
-  if (value === '') {
-    await db.delete(siteSettings).where(eq(siteSettings.key, key))
-    return
-  }
-  await db
-    .insert(siteSettings)
-    .values({ key, value, updatedAt: new Date() })
-    .onConflictDoUpdate({
-      target: siteSettings.key,
-      set: { value, updatedAt: new Date() },
-    })
-}
 
 // ── 用户管理 ────────────────────────────────────────────
 export const setUserAdmin = createServerFn({ method: 'POST' })
@@ -317,17 +318,7 @@ export const setUserAdmin = createServerFn({ method: 'POST' })
         .values({ userId: data.userId, createdAt: new Date() })
         .onConflictDoNothing()
     } else {
-      const existing = await db.query.adminUsers.findFirst({
-        where: eq(adminUsers.userId, data.userId),
-        columns: { userId: true },
-      })
-      if (existing) {
-        const rows = await db.select({ total: count() }).from(adminUsers)
-        if ((rows[0]?.total ?? 0) <= 1) {
-          throw new Error('至少保留一名管理员')
-        }
-        await db.delete(adminUsers).where(eq(adminUsers.userId, data.userId))
-      }
+      await removeAdminForUser(data.userId)
     }
     return { success: true }
   })

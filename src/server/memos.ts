@@ -159,7 +159,10 @@ export const importMemos = createServerFn({ method: 'POST' })
       memos: z
         .array(
           z.object({
-            id: z.string().min(1).optional(),
+            id: z
+              .string()
+              .regex(/^[0-9A-HJKMNP-TV-Z]{26}$/i)
+              .optional(),
             content: z.string().trim().min(1).max(MAX_CONTENT),
             visibility: z.enum(['public', 'private']).default('private'),
             pinned: z.boolean().default(false),
@@ -174,7 +177,7 @@ export const importMemos = createServerFn({ method: 'POST' })
   )
   .handler(async ({ data, context }) => {
     // 导入是重事务操作（单次最多 2000 条），限制频率
-    rateLimitOrThrow(`import-memos:${context.user.id}`, {
+    await rateLimitOrThrow(`import-memos:${context.user.id}`, {
       window: 3600,
       max: 10,
       message: '导入过于频繁，请稍后再试',

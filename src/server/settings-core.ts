@@ -45,22 +45,11 @@ export interface EmailRuntimeSettings {
   }
 }
 
-let settingsCache:
-  { expiresAt: number; value: Promise<Map<string, string>> } | undefined
-
 function readSettings(): Promise<Map<string, string>> {
-  const now = Date.now()
-  if (settingsCache && settingsCache.expiresAt > now) return settingsCache.value
-  const value = db
+  return db
     .select({ key: siteSettings.key, value: siteSettings.value })
     .from(siteSettings)
     .then((rows) => new Map(rows.map((row) => [row.key, row.value])))
-  settingsCache = { expiresAt: now + 60_000, value }
-  return value
-}
-
-export function invalidateSettingsCache(): void {
-  settingsCache = undefined
 }
 
 function parseBool(value: string | undefined, fallback: boolean): boolean {

@@ -63,7 +63,7 @@ export const addComment = createServerFn({ method: 'POST' })
     }),
   )
   .handler(async ({ data, context }) => {
-    rateLimitOrThrow(`comment:${context.user.id}`, {
+    await rateLimitOrThrow(`comment:${context.user.id}`, {
       window: 60,
       max: 30,
       message: '评论发送过于频繁，请稍后再试',

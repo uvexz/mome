@@ -14,7 +14,7 @@ import type {
 } from '@simplewebauthn/server'
 
 import { db } from '#/db'
-import { passkeys, user, verification } from '#/db/schema'
+import { passkeys, session, user, verification } from '#/db/schema'
 import { auth, webauthnConfig } from '#/lib/auth'
 import { ulid } from '#/lib/ulid'
 
@@ -53,13 +53,9 @@ async function storeChallenge(
 }
 
 async function takeChallenge(identifier: string): Promise<string | null> {
-  const row = await db.query.verification.findFirst({
-    where: eq(verification.identifier, identifier),
-  })
-  if (!row) return null
-  await db.delete(verification).where(eq(verification.id, row.id))
-  if (row.expiresAt.getTime() < Date.now()) return null
-  return row.value
+  const authCtx = await auth.$context
+  const row = await authCtx.internalAdapter.consumeVerificationValue(identifier)
+  return row?.value ?? null
 }
 
 function parseTransports(raw: string | null): AuthenticatorTransportFuture[] {
@@ -185,23 +181,46 @@ export async function verifyPasskeyLogin(
   })
   if (!result.verified) throw new Error('passkey 校验失败')
 
-  await db
-    .update(passkeys)
-    .set({
-      counter: result.authenticationInfo.newCounter,
-      lastUsedAt: new Date(),
-    })
-    .where(eq(passkeys.id, passkey.id))
-
   const authCtx = await auth.$context
-  const session = await authCtx.internalAdapter.createSession(passkey.userId)
   const tokenBytes = new Uint8Array(32)
   crypto.getRandomValues(tokenBytes)
   const token = Buffer.from(tokenBytes).toString('base64url')
-  await authCtx.internalAdapter.createVerificationValue({
-    value: session.token,
-    identifier: `one-time-token:${token}`,
-    expiresAt: new Date(Date.now() + 3 * 60 * 1000),
+  const sessionTokenBytes = new Uint8Array(32)
+  crypto.getRandomValues(sessionTokenBytes)
+  const sessionToken = Buffer.from(sessionTokenBytes).toString('base64url')
+  const now = new Date()
+
+  await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(passkeys)
+      .set({
+        counter: result.authenticationInfo.newCounter,
+        lastUsedAt: now,
+      })
+      .where(
+        and(eq(passkeys.id, passkey.id), eq(passkeys.counter, passkey.counter)),
+      )
+      .returning({ id: passkeys.id })
+    if (updated.length !== 1) throw new Error('passkey 已被使用，请重试')
+
+    await tx.insert(session).values({
+      id: ulid(),
+      token: sessionToken,
+      userId: passkey.userId,
+      expiresAt: new Date(
+        now.getTime() + authCtx.sessionConfig.expiresIn * 1000,
+      ),
+      createdAt: now,
+      updatedAt: now,
+    })
+    await tx.insert(verification).values({
+      id: ulid(),
+      value: sessionToken,
+      identifier: `one-time-token:${token}`,
+      expiresAt: new Date(now.getTime() + 3 * 60 * 1000),
+      createdAt: now,
+      updatedAt: now,
+    })
   })
   const userRow = await db.query.user.findFirst({
     where: eq(user.id, passkey.userId),

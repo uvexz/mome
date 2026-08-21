@@ -110,6 +110,10 @@ async function signUpWithoutSession(request: Request): Promise<Response> {
     await authCtx.internalAdapter.deleteSession(body.token)
   } catch (err) {
     console.error('[auth] 注册会话吊销失败', err)
+    return Response.json(
+      { error: { message: '注册暂时无法完成，请稍后重试' } },
+      { status: 500 },
+    )
   }
   headers.delete('set-cookie')
   return new Response(text, { status: response.status, headers })

@@ -50,7 +50,10 @@ export const generatePasskeyLoginOptionsFn = createServerFn({
   .validator(z.undefined())
   .handler(async () => {
     // 未认证入口：防 challenge 洪泛写库
-    rateLimitOrThrow(`passkey:options:${clientIp()}`, { window: 60, max: 30 })
+    await rateLimitOrThrow(`passkey:options:${clientIp()}`, {
+      window: 60,
+      max: 30,
+    })
     return generatePasskeyLoginOptions()
   })
 
@@ -62,7 +65,10 @@ export const verifyPasskeyLoginFn = createServerFn({ method: 'POST' })
     }),
   )
   .handler(async ({ data }) => {
-    rateLimitOrThrow(`passkey:login:${clientIp()}`, { window: 60, max: 15 })
+    await rateLimitOrThrow(`passkey:login:${clientIp()}`, {
+      window: 60,
+      max: 15,
+    })
     return verifyPasskeyLogin(
       data.challengeId,
       data.response as Parameters<typeof verifyPasskeyLogin>[1],

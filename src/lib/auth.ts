@@ -23,7 +23,7 @@ if (process.env.NODE_ENV === 'production') {
 }
 
 export const auth = betterAuth({
-  database: drizzleAdapter(db, { provider: 'sqlite' }),
+  database: drizzleAdapter(db, { provider: 'sqlite', transaction: true }),
   emailAndPassword: {
     enabled: true,
     // 是否必须验证邮箱由运行时邮件配置决定（见 /api/auth/$ 的请求守卫）
@@ -80,6 +80,7 @@ export const auth = betterAuth({
   // 部署环境漏设 NODE_ENV 时全部规则静默关闭。
   rateLimit: {
     enabled: true,
+    storage: 'database',
     ...(process.env.NODE_ENV === 'production'
       ? {
           window: 60,

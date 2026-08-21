@@ -1,7 +1,7 @@
 import { createServerFn } from '@tanstack/react-start'
 import { getRequest } from '@tanstack/react-start/server'
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto'
-import { and, eq, gt, like, or } from 'drizzle-orm'
+import { and, eq, gt, like, or, sql } from 'drizzle-orm'
 import { z } from 'zod'
 
 import { db } from '#/db'
@@ -69,7 +69,7 @@ export const requestEmailChange = createServerFn({ method: 'POST' })
     }),
   )
   .handler(async ({ data, context }) => {
-    rateLimitOrThrow(`email-change:req:${context.user.id}`, {
+    await rateLimitOrThrow(`email-change:req:${context.user.id}`, {
       window: 300,
       max: 3,
       message: '验证码发送过于频繁，请 5 分钟后再试',
@@ -122,7 +122,7 @@ export const confirmEmailChange = createServerFn({ method: 'POST' })
     }),
   )
   .handler(async ({ data, context }) => {
-    rateLimitOrThrow(`email-change:confirm:${context.user.id}`, {
+    await rateLimitOrThrow(`email-change:confirm:${context.user.id}`, {
       window: 60,
       max: 15,
       message: '尝试过于频繁，请稍后再试',
@@ -141,22 +141,43 @@ export const confirmEmailChange = createServerFn({ method: 'POST' })
     })
     if (!row) throw new Error('验证码无效或已过期')
     // 错误 5 次即作废当前 OTP，需重新请求
-    const failKey = `email-change:otp:${identifier}`
     if (!safeEqual(row.value, hashOtp(data.otp))) {
-      if (recordFailure(failKey, 5, 600)) {
-        await db.delete(verification).where(eq(verification.id, row.id))
-        clearFailures(failKey)
+      const attempts = await db.transaction(async (tx) => {
+        const updated = await tx
+          .update(verification)
+          .set({
+            attempts: sql`${verification.attempts} + 1`,
+            updatedAt: new Date(),
+          })
+          .where(eq(verification.id, row.id))
+          .returning({ attempts: verification.attempts })
+        const count = updated[0]?.attempts ?? 5
+        if (count >= 5) {
+          await tx.delete(verification).where(eq(verification.id, row.id))
+        }
+        return count
+      })
+      if (attempts >= 5) {
         throw new Error('验证码错误次数过多，请重新获取验证码')
       }
       throw new Error('验证码不正确')
     }
-    clearFailures(failKey)
-    await db.delete(verification).where(eq(verification.id, row.id))
-
-    const authCtx = await auth.$context
-    await authCtx.internalAdapter.updateUser(context.user.id, {
-      email,
-      emailVerified: true,
+    await db.transaction(async (tx) => {
+      const consumed = await tx
+        .delete(verification)
+        .where(
+          and(
+            eq(verification.id, row.id),
+            eq(verification.value, hashOtp(data.otp)),
+            gt(verification.expiresAt, new Date()),
+          ),
+        )
+        .returning({ id: verification.id })
+      if (consumed.length !== 1) throw new Error('验证码无效或已过期')
+      await tx
+        .update(user)
+        .set({ email, emailVerified: true, updatedAt: new Date() })
+        .where(eq(user.id, context.user.id))
     })
     return { success: true, email }
   })
@@ -171,7 +192,7 @@ export const deleteAccount = createServerFn({ method: 'POST' })
   .validator(z.object({ password: z.string().min(1).max(128) }))
   .handler(async ({ data, context }) => {
     // 防密码在线爆破（此路径此前完全无节流）
-    rateLimitOrThrow(`delete-account:${context.user.id}:${clientIp()}`, {
+    await rateLimitOrThrow(`delete-account:${context.user.id}:${clientIp()}`, {
       window: 60,
       max: 5,
       message: '尝试过于频繁，请稍后再试',
@@ -184,12 +205,14 @@ export const deleteAccount = createServerFn({ method: 'POST' })
       })
     } catch {
       // 连续失败 15 次熔断 15 分钟，要求等待后重试
-      if (recordFailure(`delete-account:fail:${context.user.id}`, 15, 900)) {
+      if (
+        await recordFailure(`delete-account:fail:${context.user.id}`, 15, 900)
+      ) {
         throw new Error('尝试次数过多，请 15 分钟后再试')
       }
       throw new Error('当前密码不正确')
     }
-    clearFailures(`delete-account:fail:${context.user.id}`)
+    await clearFailures(`delete-account:fail:${context.user.id}`)
 
     const authCtx = await auth.$context
     const userId = context.user.id
