@@ -82,7 +82,13 @@ function QuerySessionBoundary({ children }: { children: React.ReactNode }) {
     if (isPending) return
     const userId = session?.user.id ?? null
     if (initialized.current && previousUserId.current !== userId) {
-      queryClient.clear()
+      // 只清掉已无观察者且不在请求中的查询。queryClient.clear() 会销毁所有
+      // 查询并取消进行中的请求，注销/登录后的导航 loader（ensureQueryData）
+      // 会被连带取消，路由收到 CancelledError 进入错误页。
+      queryClient.removeQueries({
+        predicate: (query) =>
+          query.getObserversCount() === 0 && query.state.fetchStatus === 'idle',
+      })
     }
     initialized.current = true
     previousUserId.current = userId
