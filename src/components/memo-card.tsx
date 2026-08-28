@@ -178,7 +178,7 @@ export const MemoCard = memoize(function MemoCard({
             </div>
           </div>
         )}
-        <div className="max-w-[52ch] text-[15px] leading-[1.75] text-kumo-strong sm:text-base sm:leading-[1.7]">
+        <div className="text-[15px] leading-[1.75] text-kumo-strong sm:text-base sm:leading-[1.7]">
           <HashtagText
             content={memo.content}
             onTagClick={onTagClick}
