@@ -43,6 +43,9 @@ let admins: Awaited<ReturnType<typeof loadSchema>>['adminUsers']
 let apiKeyRecords: Awaited<ReturnType<typeof loadSchema>>['apiKeys']
 let settings: Awaited<ReturnType<typeof loadSchema>>['siteSettings']
 let verifications: Awaited<ReturnType<typeof loadSchema>>['verification']
+let memosTable: Awaited<ReturnType<typeof loadSchema>>['memos']
+let memoRepostRecords: Awaited<ReturnType<typeof loadSchema>>['memoReposts']
+let tagRecords: Awaited<ReturnType<typeof loadSchema>>['tags']
 
 const OWNER_ID = 'test-owner'
 const ACTOR_ID = 'test-actor'
@@ -58,7 +61,10 @@ beforeAll(async () => {
   ;({
     adminUsers: admins,
     apiKeys: apiKeyRecords,
+    memoReposts: memoRepostRecords,
+    memos: memosTable,
     siteSettings: settings,
+    tags: tagRecords,
     user: users,
     verification: verifications,
   } = await loadSchema())
@@ -493,5 +499,161 @@ describe('memo core', () => {
     await core.importMemosForUser(OWNER_ID, items)
 
     expect((await core.getStatsForUser(OWNER_ID, 0)).streak).toBe(2)
+  })
+
+  test('round-trips tags through export and import', async () => {
+    const memo = await core.createMemoForUser(
+      OWNER_ID,
+      'export source #rust/ownership',
+    )
+    const exported = await core.exportMemosForUser(OWNER_ID)
+    const source = exported.find((item) => item.id === memo.id)
+    // 导出还原完整层级路径而非叶子名
+    expect(source?.tags).toContain('rust/ownership')
+
+    // 无 id 导入：显式 tags（正文无 #hashtag）也应还原，且父标签入库
+    const imported = await core.importMemosForUser(OWNER_ID, [
+      {
+        content: 'plain content without hashtag',
+        visibility: 'private',
+        pinned: false,
+        archived: false,
+        tags: ['rust/ownership'],
+      },
+    ])
+    expect(imported.imported).toBe(1)
+    const restored = (
+      await core.listMemosForUser(OWNER_ID, { q: 'plain content' })
+    ).items[0]
+    expect(restored.tags.map((tag) => tag.name)).toContain('ownership')
+    const parent = await database.query.tags.findFirst({
+      where: eq(tagRecords.name, 'rust'),
+    })
+    expect(parent).toBeDefined()
+    const leaf = await database.query.tags.findFirst({
+      where: eq(tagRecords.name, 'ownership'),
+    })
+    expect(leaf?.parentId).toBe(parent?.id)
+  })
+})
+
+describe('merged timeline pagination', () => {
+  /**
+   * 布置交错流：6 条自己的 memo（含私密）+ 4 条对 actor 公开 memo 的转发，
+   * 时间互相交错。每个用例使用独立用户，避免公开数据串进对方断言。
+   */
+  async function seedFixture(prefix: string) {
+    const now = new Date()
+    const ownerId = `${prefix}-owner`
+    const actorId = `${prefix}-actor`
+    await database
+      .insert(users)
+      .values([
+        {
+          id: ownerId,
+          name: 'Page Owner',
+          email: `${prefix}-owner@example.com`,
+          username: `${prefix}-owner`,
+          emailVerified: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: actorId,
+          name: 'Page Actor',
+          email: `${prefix}-actor@example.com`,
+          username: `${prefix}-actor`,
+          emailVerified: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      ])
+      .onConflictDoNothing()
+
+    const base = Date.now() - 60 * 60 * 1000
+    for (let i = 0; i < 6; i++) {
+      const at = new Date(base + i * 1000)
+      await database.insert(memosTable).values({
+        id: `${prefix}-memo-${i}`,
+        userId: ownerId,
+        content: `pagination memo ${i} ${prefix}`,
+        visibility: i % 2 === 0 ? 'public' : 'private',
+        createdAt: at,
+        updatedAt: at,
+      })
+    }
+    for (let i = 0; i < 4; i++) {
+      const at = new Date(base + i * 1000 + 500)
+      const memoId = `${prefix}-actor-${i}`
+      await database.insert(memosTable).values({
+        id: memoId,
+        userId: actorId,
+        content: `actor memo ${i} ${prefix}`,
+        visibility: 'public',
+        createdAt: at,
+        updatedAt: at,
+      })
+      await database.insert(memoRepostRecords).values({
+        memoId,
+        userId: ownerId,
+        createdAt: at,
+      })
+    }
+    return { ownerId }
+  }
+
+  test('home feed pages through memos and reposts without duplicates', async () => {
+    const { ownerId } = await seedFixture('home')
+    const timeline = await import('./timeline-core')
+
+    const seen: string[] = []
+    let cursor: string | undefined
+    for (let page = 0; page < 20; page++) {
+      const res = await timeline.listHomeFeedForUser(
+        ownerId,
+        { cursor, limit: 3 },
+        ownerId,
+      )
+      for (const item of res.items) {
+        seen.push(
+          item.kind === 'repost'
+            ? `repost:${item.memo.id}`
+            : `memo:${item.memo.id}`,
+        )
+      }
+      if (!res.nextCursor) break
+      cursor = res.nextCursor
+    }
+
+    expect(seen).toHaveLength(10)
+    expect(new Set(seen).size).toBe(seen.length)
+    expect(seen[0]).toBe('memo:home-memo-5')
+  })
+
+  test('public profile feed pages without duplicates', async () => {
+    await seedFixture('profile')
+    const publicCore = await import('./public-core')
+
+    const seen: string[] = []
+    let cursor: string | undefined
+    for (let page = 0; page < 20; page++) {
+      const res = await publicCore.listPublicFeed('profile-owner', {
+        cursor,
+        limit: 3,
+      })
+      for (const item of res.items) {
+        seen.push(
+          item.kind === 'repost'
+            ? `repost:${item.memo.id}`
+            : `memo:${item.memo.id}`,
+        )
+      }
+      if (!res.nextCursor) break
+      cursor = res.nextCursor
+    }
+
+    // 主页只含 profile-owner 的 3 条公开 memo + 4 条转发
+    expect(seen).toHaveLength(7)
+    expect(new Set(seen).size).toBe(seen.length)
   })
 })

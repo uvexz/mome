@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import { AppError } from './error-shield'
 import { z } from 'zod'
 
 import { authMiddleware } from './middleware'
@@ -93,7 +94,7 @@ export const listComments = createServerFn({ method: 'GET' })
       viewer?.id ?? null,
     )
     if (!visible) {
-      throw new Error('memo not found')
+      throw new AppError('memo not found')
     }
     return listCommentsForMemo(data.memoId, {
       cursor: data.cursor,

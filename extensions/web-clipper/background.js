@@ -48,6 +48,18 @@ async function saveClip(clip) {
     return
   }
 
+  // 未授予该站点的 host permission 时 fetch 必被浏览器拦截：
+  // 提前检查并打开设置页引导授权，而不是只留一个无法理解的 '!' 徽标
+  const origin = `${new URL(baseUrl).origin}/*`
+  const granted = await chrome.permissions
+    .contains({ origins: [origin] })
+    .catch(() => false)
+  if (!granted) {
+    await showBadge('!')
+    await chrome.runtime.openOptionsPage()
+    return
+  }
+
   try {
     const response = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/clips`, {
       method: 'POST',

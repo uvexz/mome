@@ -22,30 +22,49 @@ void initialize()
 async function initialize() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
   if (!tab?.id || !tab.url) return
-  const [{ result }] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: () => ({
-      selection: window.getSelection()?.toString().trim() ?? '',
-      description:
-        document.querySelector('meta[name="description"]')?.content ??
-        document.querySelector('meta[property="og:description"]')?.content ??
-        '',
-    }),
-  })
+  // chrome:// 等受限页或未授予 host permission 时 executeScript 会抛错：
+  // 捕获后明确提示"无法剪藏当前页"，而不是按钮点击无反应
+  let pageData = null
+  try {
+    const [{ result }] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => ({
+        selection: window.getSelection()?.toString().trim() ?? '',
+        description:
+          document.querySelector('meta[name="description"]')?.content ??
+          document.querySelector('meta[property="og:description"]')?.content ??
+          '',
+      }),
+    })
+    pageData = result ?? null
+  } catch {
+    showStatus('无法读取当前页面内容（受限页面或未授予该站点权限）。', true)
+    return
+  }
+  let hostname = ''
+  try {
+    hostname = new URL(tab.url).hostname
+  } catch {
+    showStatus('当前页面地址无效。', true)
+    return
+  }
   page = {
     title: tab.title ?? '',
     url: tab.url,
-    description: result?.description ?? '',
+    description: pageData.description ?? '',
   }
   titleInput.value = page.title
-  contentInput.value = result?.selection ?? ''
-  source.textContent = new URL(page.url).hostname
+  contentInput.value = pageData.selection ?? ''
+  source.textContent = hostname
   const saved = await chrome.storage.local.get(['visibility'])
   visibilityInput.value = saved.visibility ?? 'private'
 }
 
 async function submitClip() {
-  if (!page) return
+  if (!page) {
+    showStatus('当前页面不可剪藏。', true)
+    return
+  }
   const { baseUrl, apiKey } = await chrome.storage.local.get([
     'baseUrl',
     'apiKey',
@@ -90,7 +109,14 @@ async function submitClip() {
         clientId,
       }),
     })
-    const body = await response.json()
+    // 非 JSON 响应（代理/网关的错误页等）不能让 json() 抛错掩盖真实状态码
+    const text = await response.text()
+    let body = null
+    try {
+      body = JSON.parse(text)
+    } catch {
+      body = null
+    }
     if (!response.ok) {
       throw new Error(body?.error?.message ?? `请求失败 (${response.status})`)
     }

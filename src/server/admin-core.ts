@@ -1,4 +1,5 @@
 import { and, eq, sql } from 'drizzle-orm'
+import { AppError } from './error-shield'
 
 import { db } from '#/db'
 import { adminUsers, user } from '#/db/schema'
@@ -40,6 +41,6 @@ export async function removeAdminForUser(userId: string): Promise<boolean> {
     where: eq(adminUsers.userId, userId),
     columns: { userId: true },
   })
-  if (stillAdmin) throw new Error('至少保留一名管理员')
+  if (stillAdmin) throw new AppError('至少保留一名管理员')
   return false
 }

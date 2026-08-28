@@ -6,6 +6,7 @@ import {
   isNull,
   like,
   lt,
+  lte,
   ne,
   or,
   sql,
@@ -220,15 +221,28 @@ export async function listHomeFeedForUser(
       q: params.q,
       cursor: cur && cur.p === 1 ? { t: cur.t, i: cur.i } : undefined,
     })
+    // 与普通区一致：补齐标签 / 计数 / 查看状态
+    const pinnedIds = pinRows.map((memo) => memo.id)
+    const [tagData, countsMap, viewerMap] = await Promise.all([
+      loadMemoTags(pinnedIds),
+      loadMemoCounts(pinnedIds),
+      loadViewerStates(pinnedIds, viewerId),
+    ])
+    const toTimelineItem = (memo: typeof memos.$inferSelect): TimelineItem => ({
+      kind: 'memo' as const,
+      memo: toMemoWithTags(
+        memo,
+        tagData.filter((tag) => tag.memoId === memo.id),
+        countsMap.get(memo.id),
+        viewerMap.get(memo.id),
+      ),
+      author: null,
+      repost: null,
+    })
     if (pinRows.length > limit) {
       const last = pinRows[limit - 1]
       return {
-        items: pinRows.slice(0, limit).map((memo): TimelineItem => ({
-          kind: 'memo' as const,
-          memo: toMemoWithTags(memo, []),
-          author: null,
-          repost: null,
-        })),
+        items: pinRows.slice(0, limit).map(toTimelineItem),
         nextCursor: makeCursor({
           p: 1,
           t: last.createdAt.getTime(),
@@ -236,14 +250,7 @@ export async function listHomeFeedForUser(
         }),
       }
     }
-    pinned.push(
-      ...pinRows.map((memo): TimelineItem => ({
-        kind: 'memo' as const,
-        memo: toMemoWithTags(memo, []),
-        author: null,
-        repost: null,
-      })),
-    )
+    pinned.push(...pinRows.map(toTimelineItem))
   }
 
   const remaining = limit - pinned.length
@@ -379,22 +386,27 @@ async function fetchMergedTimeline(
 
   const cur = opts.cursor
   if (cur) {
-    if (cur.k !== 'repost') {
-      const cond = or(
+    // 合并流按时间倒序输出，同刻时 memo 先于 repost；游标是最后一条已输出项：
+    // - 游标同侧流用严格 keyset（更早，或同刻且 id 更小）；
+    // - 另一侧流按"同刻是否已输出"收紧：游标是 memo 时同刻 repost 尚未输出（<=），
+    //   游标是 repost 时同刻 memo 已全部输出（<）。否则另一侧流无约束会重复输出。
+    if (cur.k === 'memo') {
+      const memoCond = or(
         lt(memos.createdAt, new Date(cur.t)),
         and(eq(memos.createdAt, new Date(cur.t)), lt(memos.id, cur.i)),
       )
-      if (cond) conditions.push(cond)
-    }
-    if (cur.k !== 'memo') {
-      const cond = or(
+      if (memoCond) conditions.push(memoCond)
+      repostConditions.push(lte(memoReposts.createdAt, new Date(cur.t)))
+    } else {
+      const repostCond = or(
         lt(memoReposts.createdAt, new Date(cur.t)),
         and(
           eq(memoReposts.createdAt, new Date(cur.t)),
           lt(memoReposts.memoId, cur.i),
         ),
       )
-      if (cond) repostConditions.push(cond)
+      if (repostCond) repostConditions.push(repostCond)
+      conditions.push(lt(memos.createdAt, new Date(cur.t)))
     }
   }
 

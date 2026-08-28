@@ -268,6 +268,9 @@ function AdminShell({ overview }: { overview: AdminOverview }) {
   const { setOpenMobile } = useSidebar()
   const [draft, setDraft] = useState<Draft>(() => toDraft(overview.settings))
   const [users, setUsers] = useState<AdminUserItem[]>(overview.users)
+  const [usersPage, setUsersPage] = useState(overview.usersPage)
+  const [usersTotal, setUsersTotal] = useState(overview.usersTotal)
+  const [usersLoading, setUsersLoading] = useState(false)
   const [s3Enabled, setS3Enabled] = useState(overview.settings.s3.enabled)
   const [smtpConfigured, setSmtpConfigured] = useState(
     overview.settings.smtp.configured,
@@ -278,16 +281,33 @@ function AdminShell({ overview }: { overview: AdminOverview }) {
   const [saving, setSaving] = useState(false)
   const activeTab: AdminTab = search.tab ?? 'overview'
 
-  async function refresh() {
-    const next = await queryClient.fetchQuery({
-      ...adminOverviewQueryOptions(),
+  async function fetchUsersPage(page: number): Promise<AdminOverview> {
+    return queryClient.fetchQuery({
+      ...adminOverviewQueryOptions(page),
       staleTime: 0,
     })
+  }
+
+  async function changeUsersPage(page: number) {
+    setUsersLoading(true)
+    try {
+      const next = await fetchUsersPage(page)
+      setUsers(next.users)
+      setUsersTotal(next.usersTotal)
+      setUsersPage(next.usersPage)
+    } finally {
+      setUsersLoading(false)
+    }
+  }
+
+  async function refresh() {
+    const next = await fetchUsersPage(usersPage)
     await queryClient.invalidateQueries({
       queryKey: queryKeys.public,
       refetchType: 'none',
     })
     setUsers(next.users)
+    setUsersTotal(next.usersTotal)
     setS3Enabled(next.settings.s3.enabled)
     setSmtpConfigured(next.settings.smtp.configured)
     setResendConfigured(next.settings.resend.configured)
@@ -409,7 +429,15 @@ function AdminShell({ overview }: { overview: AdminOverview }) {
             />
           )}
           {activeTab === 'users' && (
-            <UsersSection users={users} onRefresh={refresh} />
+            <UsersSection
+              users={users}
+              page={usersPage}
+              pageSize={overview.usersPageSize}
+              total={usersTotal}
+              loading={usersLoading}
+              onPageChange={(page) => void changeUsersPage(page)}
+              onRefresh={refresh}
+            />
           )}
         </main>
       </div>
@@ -501,11 +529,8 @@ function OverviewSection({
   onNavigate: (tab: AdminTab) => void
 }) {
   const settings = overview.settings
-  const totalMemos = overview.users.reduce(
-    (sum, user) => sum + user.memoCount,
-    0,
-  )
-  const adminCount = overview.users.filter((user) => user.isAdmin).length
+  // 概览统计来自服务端全量计数，不依赖分页后的用户列表
+  const { totalUsers, totalMemos, adminCount } = overview.stats
   const emailConfigured = settings.smtp.configured || settings.resend.configured
 
   return (
@@ -540,7 +565,7 @@ function OverviewSection({
         <StatCard
           icon={<Users size={20} />}
           label="用户"
-          value={String(overview.users.length)}
+          value={String(totalUsers)}
         />
         <StatCard
           icon={<NotePencil size={20} />}
@@ -1248,14 +1273,25 @@ function ResendSection({
 // ── 用户管理 ───────────────────────────────────────────
 function UsersSection({
   users,
+  page,
+  pageSize,
+  total,
+  loading,
+  onPageChange,
   onRefresh,
 }: {
   users: AdminUserItem[]
+  page: number
+  pageSize: number
+  total: number
+  loading: boolean
+  onPageChange: (page: number) => void
   onRefresh: () => Promise<void>
 }) {
   const toast = useKumoToastManager()
   const [deleting, setDeleting] = useState<AdminUserItem | null>(null)
   const [busy, setBusy] = useState(false)
+  const totalPages = Math.max(1, Math.ceil(total / pageSize))
 
   async function handleSetAdmin(item: AdminUserItem, admin: boolean) {
     try {
@@ -1395,6 +1431,35 @@ function UsersSection({
           </Table>
         </div>
       )}
+
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-xs text-kumo-subtle">
+          共 {total} 位用户
+          {totalPages > 1 && ` · 第 ${page + 1} / ${totalPages} 页`}
+        </span>
+        {totalPages > 1 && (
+          <div className="flex gap-2">
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-8"
+              disabled={page === 0 || loading}
+              onClick={() => onPageChange(page - 1)}
+            >
+              上一页
+            </Button>
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-8"
+              disabled={page + 1 >= totalPages || loading}
+              onClick={() => onPageChange(page + 1)}
+            >
+              下一页
+            </Button>
+          </div>
+        )}
+      </div>
 
       <Dialog.Root
         open={deleting !== null}

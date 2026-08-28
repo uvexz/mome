@@ -14,15 +14,23 @@ import { appConfigQueryOptions, queryKeys } from '#/lib/queries'
 import {
   clearComposerDraft,
   enqueueMemo,
+  incrementQueuedMemoAttempts,
   listQueuedMemos,
   loadComposerDraft,
   removeQueuedMemo,
   saveComposerDraft,
 } from '#/lib/composer-storage'
+import { MAX_CONTENT } from '#/lib/limits'
 import { assertImageSignature, uploadPresignedPost } from '#/lib/upload'
 import { createMemo } from '#/server/memos'
 import type { MemoWithTags } from '#/server/memos'
 import { getUploadUrl } from '#/server/upload'
+
+/** 在线重发同一离线条目连续失败该次数后，视为无法恢复并丢弃 */
+const MAX_OUTBOX_ATTEMPTS = 3
+
+// 模块级 flush 锁：多个 Composer 实例 / StrictMode 双挂载也不会并发重发同一个 outbox
+let flushingOutbox = false
 
 function isBrowserOnline(): boolean {
   return navigator.onLine
@@ -119,10 +127,9 @@ export function Composer({
   }, [content, visibility])
 
   useEffect(() => {
-    let flushing = false
     async function flushOutbox() {
-      if (flushing || !isBrowserOnline()) return
-      flushing = true
+      if (flushingOutbox || !isBrowserOnline()) return
+      flushingOutbox = true
       try {
         const queued = await listQueuedMemos()
         for (const item of queued) {
@@ -144,14 +151,24 @@ export function Composer({
             }
           } catch (error) {
             if (!isBrowserOnline()) break
-            onErrorRef.current(
-              error instanceof Error ? error.message : '离线内容发送失败',
-            )
+            // 在线状态下的失败：可能是服务端校验拒绝（永远不会成功），
+            // 也可能是瞬时故障——用失败计数区分，超限丢弃防"毒丸"堵死队列
+            const attempts = await incrementQueuedMemoAttempts(item.id)
+            if (attempts >= MAX_OUTBOX_ATTEMPTS) {
+              await removeQueuedMemo(item.id)
+              onErrorRef.current(
+                `离线内容连续 ${attempts} 次发送失败，已停止重试`,
+              )
+            } else {
+              onErrorRef.current(
+                error instanceof Error ? error.message : '离线内容发送失败',
+              )
+            }
             break
           }
         }
       } finally {
-        flushing = false
+        flushingOutbox = false
       }
     }
 
@@ -163,6 +180,10 @@ export function Composer({
   async function submit() {
     const text = content.trim()
     if (!text || submitting) return
+    if (text.length > MAX_CONTENT) {
+      onError(`内容超过 ${MAX_CONTENT} 字上限，请拆分后再发布`)
+      return
+    }
     const clientId = crypto.randomUUID()
     setSubmitting(true)
     try {

@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import { AppError } from './error-shield'
 import { z } from 'zod'
 
 import { authMiddleware } from './middleware'
@@ -30,7 +31,7 @@ export const createApiKey = createServerFn({ method: 'POST' })
   .handler(async ({ data, context }) => {
     const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null
     if (expiresAt && expiresAt.getTime() <= Date.now()) {
-      throw new Error('过期时间必须晚于当前时间')
+      throw new AppError('过期时间必须晚于当前时间')
     }
     return createApiKeyForUser(context.user.id, data.name, { expiresAt })
   })

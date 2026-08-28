@@ -1,4 +1,5 @@
 import { and, asc, count, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
+import { AppError } from './error-shield'
 
 import { db } from '#/db'
 import {
@@ -173,8 +174,9 @@ export async function toggleLikeForUser(
   userId: string,
   memoId: string,
 ): Promise<{ liked: boolean; counts: MemoCounts }> {
-  // 查重 + 写入 + 通知在同一事务内，并发双击只会得到确定性的 toggle 序列，
-  // 不会因主键冲突抛 500，也不会出现"互动成功但通知失败"的不一致
+  // 查重 + 写入 + 通知在同一事务内。并发双击下第二个事务的 INSERT 会撞主键，
+  // 用 ON CONFLICT DO NOTHING 吞掉并视为幂等"已点赞"（通知由先到的事务负责），
+  // 避免远端 libsql 下 check-then-insert 竞态抛 500，也不会出现"互动成功但通知失败"的不一致
   const liked = await db.transaction(async (tx) => {
     const existing = await tx.query.memoLikes.findFirst({
       where: and(eq(memoLikes.memoId, memoId), eq(memoLikes.userId, userId)),
@@ -186,16 +188,31 @@ export async function toggleLikeForUser(
       await deleteNotificationInTx(tx, userId, memoId, 'like')
       return false
     }
+    const visibleMemo = await tx
+      .select({ id: memos.id })
+      .from(memos)
+      .where(
+        and(
+          eq(memos.id, memoId),
+          isNull(memos.deletedAt),
+          or(eq(memos.visibility, 'public'), eq(memos.userId, userId)),
+        ),
+      )
+    if (visibleMemo.length === 0) {
+      throw new AppError('memo not found or not public')
+    }
     const inserted = await tx.all(sql`
       INSERT INTO ${memoLikes} (memo_id, user_id, created_at)
       SELECT ${memos.id}, ${userId}, ${Date.now()}
       FROM ${memos}
       WHERE ${memos.id} = ${memoId}
-        AND ${memos.deletedAt} IS NULL
-        AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
+      ON CONFLICT DO NOTHING
       RETURNING memo_id
     `)
-    if (inserted.length !== 1) throw new Error('memo not found or not public')
+    if (inserted.length !== 1) {
+      // 可见性已预检过，0 行只能是并发对手抢先插入：幂等返回当前已点赞状态
+      return true
+    }
     await insertNotificationInTx(tx, userId, memoId, 'like')
     return true
   })
@@ -225,16 +242,27 @@ export async function toggleFavoriteForUser(
         )
       return false
     }
-    const inserted = await tx.all(sql`
+    const visibleMemo = await tx
+      .select({ id: memos.id })
+      .from(memos)
+      .where(
+        and(
+          eq(memos.id, memoId),
+          isNull(memos.deletedAt),
+          or(eq(memos.visibility, 'public'), eq(memos.userId, userId)),
+        ),
+      )
+    if (visibleMemo.length === 0) {
+      throw new AppError('memo not found or not public')
+    }
+    // 可见性已预检过，ON CONFLICT 吞掉的 0 行只能是并发对手抢先插入：幂等返回已收藏
+    await tx.all(sql`
       INSERT INTO ${memoFavorites} (memo_id, user_id, created_at)
       SELECT ${memos.id}, ${userId}, ${Date.now()}
       FROM ${memos}
       WHERE ${memos.id} = ${memoId}
-        AND ${memos.deletedAt} IS NULL
-        AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
-      RETURNING memo_id
+      ON CONFLICT DO NOTHING
     `)
-    if (inserted.length !== 1) throw new Error('memo not found or not public')
     return true
   })
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
@@ -262,16 +290,31 @@ export async function toggleRepostForUser(
       await deleteNotificationInTx(tx, userId, memoId, 'repost')
       return false
     }
+    const visibleMemo = await tx
+      .select({ id: memos.id })
+      .from(memos)
+      .where(
+        and(
+          eq(memos.id, memoId),
+          isNull(memos.deletedAt),
+          or(eq(memos.visibility, 'public'), eq(memos.userId, userId)),
+        ),
+      )
+    if (visibleMemo.length === 0) {
+      throw new AppError('memo not found or not public')
+    }
     const inserted = await tx.all(sql`
       INSERT INTO ${memoReposts} (memo_id, user_id, content, created_at)
       SELECT ${memos.id}, ${userId}, ${content?.trim() || null}, ${Date.now()}
       FROM ${memos}
       WHERE ${memos.id} = ${memoId}
-        AND ${memos.deletedAt} IS NULL
-        AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
+      ON CONFLICT DO NOTHING
       RETURNING memo_id
     `)
-    if (inserted.length !== 1) throw new Error('memo not found or not public')
+    if (inserted.length !== 1) {
+      // 可见性已预检过，0 行只能是并发对手抢先插入：幂等返回当前已转发状态
+      return true
+    }
     await insertNotificationInTx(tx, userId, memoId, 'repost')
     return true
   })
@@ -301,7 +344,7 @@ export async function updateRepostForUser(
     )
     .returning()
   if (res.length === 0) {
-    throw new Error('repost not found')
+    throw new AppError('repost not found')
   }
   const counts = (await loadMemoCounts([memoId])).get(memoId) ?? EMPTY_COUNTS
   return { reposted: true, counts }
@@ -326,7 +369,8 @@ export async function addCommentForUser(
         AND (${memos.visibility} = 'public' OR ${memos.userId} = ${userId})
       RETURNING id
     `)
-    if (inserted.length !== 1) throw new Error('memo not found or not public')
+    if (inserted.length !== 1)
+      throw new AppError('memo not found or not public')
     await insertNotificationInTx(tx, userId, memoId, 'comment', id)
   })
   const row = await db
@@ -342,7 +386,7 @@ export async function addCommentForUser(
     .from(memoComments)
     .innerJoin(user, eq(user.id, memoComments.userId))
     .where(eq(memoComments.id, id))
-  if (row.length === 0) throw new Error('comment not found')
+  if (row.length === 0) throw new AppError('comment not found')
   const first = row[0]
   const comment: CommentItem = {
     id: first.id,
@@ -392,7 +436,11 @@ export async function listCommentsForMemo(
   const conditions = [eq(memoComments.memoId, memoId)]
   if (opts.cursor) {
     const cur = await db.query.memoComments.findFirst({
-      where: eq(memoComments.id, opts.cursor),
+      // 游标必须属于当前 memo，否则跨 memo 的评论 id 会错误跳过本页内容
+      where: and(
+        eq(memoComments.id, opts.cursor),
+        eq(memoComments.memoId, memoId),
+      ),
       columns: { createdAt: true, id: true },
     })
     if (cur) {
@@ -447,9 +495,11 @@ export async function assertMemoVisibleToUser(
 ): Promise<boolean> {
   const memo = await db.query.memos.findFirst({
     where: and(eq(memos.id, memoId), isNull(memos.deletedAt)),
-    columns: { userId: true, visibility: true },
+    columns: { userId: true, visibility: true, archived: true },
   })
   if (!memo) return false
-  if (memo.visibility === 'public') return true
-  return viewerId !== null && viewerId === memo.userId
+  // 作者始终可见（含归档）；其余 viewer 与公开页口径一致：已归档不可达
+  if (viewerId !== null && viewerId === memo.userId) return true
+  if (memo.archived) return false
+  return memo.visibility === 'public'
 }

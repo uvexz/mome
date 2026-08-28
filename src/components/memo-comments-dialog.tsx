@@ -24,6 +24,7 @@ import { addComment, deleteComment } from '#/server/interactions'
 import type { CommentItem, MemoCounts } from '#/server/interactions-core'
 import type { MemoWithTags } from '#/server/memos'
 import { Avatar } from './avatar'
+import { HashtagText } from './hashtag-text'
 
 interface MemoCommentsDialogProps {
   open: boolean
@@ -195,9 +196,9 @@ export function MemoCommentsDialog({
                         </button>
                       )}
                     </div>
-                    <p className="mt-0.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-kumo-default">
-                      {comment.content}
-                    </p>
+                    <div className="mt-0.5 text-sm leading-relaxed text-kumo-default">
+                      <HashtagText content={comment.content} />
+                    </div>
                   </div>
                 </div>
               ))}

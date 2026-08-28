@@ -90,7 +90,7 @@ export async function loadS3Settings(): Promise<S3RuntimeSettings> {
   const accessKeyId =
     map.get('s3_access_key_id')?.trim() || process.env.S3_ACCESS_KEY_ID || ''
   const secretAccessKey =
-    decryptSettingValue(map.get('s3_secret_access_key') ?? '') ||
+    decryptSettingValue(map.get('s3_secret_access_key') ?? '', 'S3 secret') ||
     process.env.S3_SECRET_ACCESS_KEY ||
     ''
   const publicUrl =
@@ -123,7 +123,7 @@ export async function loadEmailSettings(): Promise<EmailRuntimeSettings> {
     ),
     user: map.get('smtp_user')?.trim() || process.env.SMTP_USER || '',
     password:
-      decryptSettingValue(map.get('smtp_pass') ?? '') ||
+      decryptSettingValue(map.get('smtp_pass') ?? '', 'SMTP 密码') ||
       process.env.SMTP_PASS ||
       '',
     from:
@@ -137,7 +137,7 @@ export async function loadEmailSettings(): Promise<EmailRuntimeSettings> {
 
   const resend = {
     apiKey:
-      decryptSettingValue(map.get('resend_api_key') ?? '') ||
+      decryptSettingValue(map.get('resend_api_key') ?? '', 'Resend API key') ||
       process.env.RESEND_API_KEY ||
       '',
     from: map.get('resend_from')?.trim() || process.env.RESEND_FROM || '',

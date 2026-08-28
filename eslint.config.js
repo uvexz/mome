@@ -27,7 +27,6 @@ export default [
       'tests/**',
       'public/*.js',
       'extensions/**',
-      '**/*.test.ts',
     ],
   },
 ]

@@ -1,5 +1,6 @@
 import { createServerFn } from '@tanstack/react-start'
-import { count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { AppError } from './error-shield'
+import { and, count, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod'
 
@@ -65,13 +66,13 @@ export const claimAdmin = createServerFn({ method: 'POST' })
     })
     const expected = process.env.ADMIN_TOKEN
     if (!expected) {
-      throw new Error('未配置 ADMIN_TOKEN 环境变量')
+      throw new AppError('未配置 ADMIN_TOKEN 环境变量')
     }
     if (!safeEqual(data.token, expected)) {
-      throw new Error('AdminToken 不正确')
+      throw new AppError('AdminToken 不正确')
     }
     if (!(await claimFirstAdminForUser(context.user.id))) {
-      throw new Error('站点已有管理员')
+      throw new AppError('站点已有管理员')
     }
     return { success: true }
   })
@@ -86,7 +87,9 @@ function safeEqual(a: string, b: string): boolean {
 export const toggleGlobalPin = createServerFn({ method: 'POST' })
   .middleware([adminMiddleware])
   .validator(z.object({ memoId: z.string().min(1) }))
-  .handler(async ({ data }) => toggleGlobalPinForAdmin(data.memoId))
+  .handler(async ({ data, context }) =>
+    toggleGlobalPinForAdmin(context.user.id, data.memoId),
+  )
 
 // ── 管理端设置视图 ──────────────────────────────────────
 export interface AdminSettings {
@@ -132,29 +135,72 @@ export interface AdminUserItem {
   isAdmin: boolean
 }
 
+export interface AdminOverviewStats {
+  totalUsers: number
+  totalMemos: number
+  adminCount: number
+}
+
 export interface AdminOverview {
   settings: AdminSettings
+  stats: AdminOverviewStats
   users: AdminUserItem[]
+  usersTotal: number
+  usersPage: number
+  usersPageSize: number
 }
+
+/** 用户管理列表每页数量 */
+const USERS_PAGE_SIZE = 20
 
 export const getAdminOverview = createServerFn({ method: 'GET' })
   .middleware([adminMiddleware])
-  .validator(z.undefined())
-  .handler(async (): Promise<AdminOverview> => {
-    const [site, s3, email, userRows, adminRows, memoRows] = await Promise.all([
+  .validator(
+    z.object({ page: z.number().int().min(0).max(100000).default(0) }).default({
+      page: 0,
+    }),
+  )
+  .handler(async ({ data }): Promise<AdminOverview> => {
+    const page = data.page
+    const [site, s3, email, userRows, totals, adminRows] = await Promise.all([
       loadSiteSettings(),
       loadS3Settings(),
       loadEmailSettings(),
-      db.select().from(user).orderBy(desc(user.createdAt)),
-      db.select({ userId: adminUsers.userId }).from(adminUsers),
+      // 用户列表分页加载；memo 计数只统计当前页用户，避免全表 group by
       db
-        .select({ userId: memos.userId, total: count() })
-        .from(memos)
-        .where(isNull(memos.deletedAt))
-        .groupBy(memos.userId),
+        .select()
+        .from(user)
+        .orderBy(desc(user.createdAt))
+        .limit(USERS_PAGE_SIZE)
+        .offset(page * USERS_PAGE_SIZE),
+      Promise.all([
+        db.select({ total: count() }).from(user),
+        db
+          .select({ total: count() })
+          .from(memos)
+          .where(isNull(memos.deletedAt)),
+        db.select({ total: count() }).from(adminUsers),
+      ]),
+      db.select({ userId: adminUsers.userId }).from(adminUsers),
     ])
     const adminIds = new Set(adminRows.map((row) => row.userId))
-    const memoCounts = new Map(memoRows.map((row) => [row.userId, row.total]))
+    const memoCounts = new Map<string, number>()
+    if (userRows.length > 0) {
+      const memoRows = await db
+        .select({ userId: memos.userId, total: count() })
+        .from(memos)
+        .where(
+          and(
+            isNull(memos.deletedAt),
+            inArray(
+              memos.userId,
+              userRows.map((u) => u.id),
+            ),
+          ),
+        )
+        .groupBy(memos.userId)
+      for (const row of memoRows) memoCounts.set(row.userId, row.total)
+    }
 
     return {
       settings: {
@@ -187,6 +233,11 @@ export const getAdminOverview = createServerFn({ method: 'GET' })
           from: email.resend.from,
         },
       },
+      stats: {
+        totalUsers: totals[0][0]?.total ?? 0,
+        totalMemos: totals[1][0]?.total ?? 0,
+        adminCount: totals[2][0]?.total ?? 0,
+      },
       users: userRows.map((u) => ({
         id: u.id,
         name: u.name,
@@ -198,6 +249,9 @@ export const getAdminOverview = createServerFn({ method: 'GET' })
         memoCount: memoCounts.get(u.id) ?? 0,
         isAdmin: adminIds.has(u.id),
       })),
+      usersTotal: totals[0][0]?.total ?? 0,
+      usersPage: page,
+      usersPageSize: USERS_PAGE_SIZE,
     }
   })
 
@@ -310,7 +364,7 @@ export const setUserAdmin = createServerFn({ method: 'POST' })
       where: eq(user.id, data.userId),
       columns: { id: true },
     })
-    if (!target) throw new Error('用户不存在')
+    if (!target) throw new AppError('用户不存在')
 
     if (data.admin) {
       await db
@@ -328,13 +382,13 @@ export const deleteUser = createServerFn({ method: 'POST' })
   .validator(z.object({ userId: z.string().min(1) }))
   .handler(async ({ data, context }): Promise<{ success: boolean }> => {
     if (data.userId === context.user.id) {
-      throw new Error('不能删除当前登录的管理员')
+      throw new AppError('不能删除当前登录的管理员')
     }
     const target = await db.query.user.findFirst({
       where: eq(user.id, data.userId),
       columns: { id: true },
     })
-    if (!target) throw new Error('用户不存在')
+    if (!target) throw new AppError('用户不存在')
 
     const authCtx = await auth.$context
     await authCtx.internalAdapter.deleteUser(data.userId)

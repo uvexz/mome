@@ -21,7 +21,9 @@ if (isProd) {
   securityHeaders['Content-Security-Policy'] = [
     "default-src 'self'",
     // TanStack Start 依赖内联脚本完成 hydration($tsr-stream-barrier 流式注入 + 滚动恢复)，
-    // router-core 的注入 transform 不支持 nonce，且 payload 为动态内容无法 hash，必须放行 unsafe-inline
+    // router-core 的注入 transform 不支持 nonce，且 payload 为动态内容无法 hash，必须放行 unsafe-inline。
+    // 上游 ssr.nonce 已存在但尚不覆盖全部内联脚本，修复后可收紧：
+    // https://github.com/TanStack/router/issues/5511
     "script-src 'self' 'unsafe-inline'",
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' https: data:",

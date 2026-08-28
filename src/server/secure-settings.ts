@@ -34,11 +34,11 @@ export function encryptSettingValue(value: string): string {
   return `${PREFIX}${iv.toString('base64url')}:${tag.toString('base64url')}:${ciphertext.toString('base64url')}`
 }
 
-export function decryptSettingValue(value: string): string {
+export function decryptSettingValue(value: string, label = '站点机密'): string {
   if (!value.startsWith(PREFIX)) return value
   const key = deriveKey()
   if (!key) {
-    console.error('[settings] 缺少 BETTER_AUTH_SECRET，无法解密站点机密配置')
+    console.error(`[settings] 缺少 BETTER_AUTH_SECRET，无法解密${label}`)
     return ''
   }
   try {
@@ -53,8 +53,9 @@ export function decryptSettingValue(value: string): string {
       decipher.final(),
     ]).toString('utf8')
   } catch {
+    // 带上具体配置项名：换 BETTER_AUTH_SECRET 后管理员能直接定位是哪个机密失效
     console.error(
-      '[settings] 站点机密配置解密失败（BETTER_AUTH_SECRET 是否变更过？）',
+      `[settings] ${label}解密失败（BETTER_AUTH_SECRET 是否变更过？请在管理页重新录入）`,
     )
     return ''
   }

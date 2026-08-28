@@ -263,6 +263,8 @@ export const tags = sqliteTable(
   (t) => [
     uniqueIndex('tags_user_name_parent_idx').on(t.userId, t.name, t.parentKey),
     index('tags_user_parent_idx').on(t.userId, t.parentId),
+    // 跨用户标签解析（全局流/探索页按 name 过滤）：无 user 前缀的查询路径
+    index('tags_name_parent_idx').on(t.name, t.parentId),
   ],
 )
 

@@ -58,10 +58,10 @@ export const adminGateQueryOptions = () =>
     queryFn: () => getAdminGate(),
   })
 
-export const adminOverviewQueryOptions = () =>
+export const adminOverviewQueryOptions = (usersPage = 0) =>
   queryOptions({
-    queryKey: [...queryKeys.admin, 'overview'] as const,
-    queryFn: () => getAdminOverview(),
+    queryKey: [...queryKeys.admin, 'overview', usersPage] as const,
+    queryFn: () => getAdminOverview({ data: { page: usersPage } }),
   })
 
 export const apiKeysQueryOptions = () =>

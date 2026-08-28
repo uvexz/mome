@@ -1,4 +1,5 @@
 import { createServerFn } from '@tanstack/react-start'
+import { AppError } from './error-shield'
 import { getRequest } from '@tanstack/react-start/server'
 import { createHash, randomInt, timingSafeEqual } from 'node:crypto'
 import { and, eq, gt, like, or, sql } from 'drizzle-orm'
@@ -76,7 +77,7 @@ export const requestEmailChange = createServerFn({ method: 'POST' })
     })
     const emailSettings = await loadEmailSettings()
     if (!emailSettings.enabled) {
-      throw new Error('邮件服务未配置，无法更换邮箱')
+      throw new AppError('邮件服务未配置，无法更换邮箱')
     }
     // 1. 校验当前密码
     const request = getRequest()
@@ -87,15 +88,18 @@ export const requestEmailChange = createServerFn({ method: 'POST' })
       })
     } catch (err) {
       console.error('[email-change] verifyPassword failed', err)
-      throw new Error('当前密码不正确')
+      throw new AppError('当前密码不正确')
     }
 
     const email = data.newEmail.toLowerCase()
+    if (email === context.user.email.toLowerCase()) {
+      throw new AppError('新邮箱不能与当前邮箱相同')
+    }
     const existing = await db.query.user.findFirst({
       where: eq(user.email, email),
       columns: { id: true },
     })
-    if (existing) throw new Error('该邮箱已被使用')
+    if (existing) throw new AppError('该邮箱已被使用')
 
     // 2. 生成新邮箱 OTP（只存哈希）
     const identifier = emailChangeIdentifier(context.user.id, email)
@@ -129,7 +133,7 @@ export const confirmEmailChange = createServerFn({ method: 'POST' })
     })
     const emailSettings = await loadEmailSettings()
     if (!emailSettings.enabled) {
-      throw new Error('邮件服务未配置，无法更换邮箱')
+      throw new AppError('邮件服务未配置，无法更换邮箱')
     }
     const email = data.newEmail.toLowerCase()
     const identifier = emailChangeIdentifier(context.user.id, email)
@@ -139,7 +143,7 @@ export const confirmEmailChange = createServerFn({ method: 'POST' })
         gt(verification.expiresAt, new Date()),
       ),
     })
-    if (!row) throw new Error('验证码无效或已过期')
+    if (!row) throw new AppError('验证码无效或已过期')
     // 错误 5 次即作废当前 OTP，需重新请求
     if (!safeEqual(row.value, hashOtp(data.otp))) {
       const attempts = await db.transaction(async (tx) => {
@@ -158,9 +162,9 @@ export const confirmEmailChange = createServerFn({ method: 'POST' })
         return count
       })
       if (attempts >= 5) {
-        throw new Error('验证码错误次数过多，请重新获取验证码')
+        throw new AppError('验证码错误次数过多，请重新获取验证码')
       }
-      throw new Error('验证码不正确')
+      throw new AppError('验证码不正确')
     }
     await db.transaction(async (tx) => {
       const consumed = await tx
@@ -173,7 +177,16 @@ export const confirmEmailChange = createServerFn({ method: 'POST' })
           ),
         )
         .returning({ id: verification.id })
-      if (consumed.length !== 1) throw new Error('验证码无效或已过期')
+      if (consumed.length !== 1) throw new AppError('验证码无效或已过期')
+      // 请求与确认之间邮箱可能被他人注册（TOCTOU）：显式查重并返回业务错误，
+      // 避免落到 user.email 唯一约束抛原始 DB 错误
+      const taken = await tx.query.user.findFirst({
+        where: eq(user.email, email),
+        columns: { id: true },
+      })
+      if (taken && taken.id !== context.user.id) {
+        throw new AppError('该邮箱已被使用，请换一个邮箱后重新验证')
+      }
       await tx
         .update(user)
         .set({ email, emailVerified: true, updatedAt: new Date() })
@@ -208,9 +221,9 @@ export const deleteAccount = createServerFn({ method: 'POST' })
       if (
         await recordFailure(`delete-account:fail:${context.user.id}`, 15, 900)
       ) {
-        throw new Error('尝试次数过多，请 15 分钟后再试')
+        throw new AppError('尝试次数过多，请 15 分钟后再试')
       }
-      throw new Error('当前密码不正确')
+      throw new AppError('当前密码不正确')
     }
     await clearFailures(`delete-account:fail:${context.user.id}`)
 

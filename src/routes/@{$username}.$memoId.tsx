@@ -16,6 +16,7 @@ import { ArrowLeft, PaperPlaneRight, Trash } from '@phosphor-icons/react'
 import { authClient } from '#/lib/auth-client'
 import { relativeTime } from '#/lib/date'
 import { Avatar } from '#/components/avatar'
+import { HashtagText } from '#/components/hashtag-text'
 import { MemoCard } from '#/components/memo-card'
 import { RepostDialog } from '#/components/repost-dialog'
 import {
@@ -54,7 +55,6 @@ function MemoPage() {
     params.memoId,
   )
   const { data: loadedDetail } = useSuspenseQuery(detailOptions)
-  const detail = loadedDetail!
   const commentsOptions = commentsQueryOptions(params.memoId)
   const commentsQuery = useSuspenseInfiniteQuery(commentsOptions)
   const comments = commentsQuery.data.pages.flatMap((page) => page.items)
@@ -62,10 +62,38 @@ function MemoPage() {
   const navigate = useNavigate()
   const toast = useKumoToastManager()
   const { data: session } = authClient.useSession()
-  const memo = detail.memo
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [repostOpen, setRepostOpen] = useState(false)
+
+  // memo 在页面打开期间被删除或转私密时，suspense refetch 会得到 undefined：
+  // 用兜底 UI 代替非空断言，避免查询抛 "Query data cannot be undefined" 进错误边界
+  if (!loadedDetail) {
+    return (
+      <div className="min-h-dvh">
+        <header className="sticky top-0 z-40 border-b border-kumo-line bg-kumo-canvas/85 backdrop-blur">
+          <div className="mx-auto flex h-14 w-full max-w-[640px] items-center gap-3 px-4">
+            <Button
+              variant="ghost"
+              shape="square"
+              icon={<ArrowLeft size={16} />}
+              aria-label="返回探索"
+              title="返回"
+              onClick={() => void navigate({ to: '/explore' })}
+            />
+          </div>
+        </header>
+        <main className="mx-auto w-full max-w-[640px] px-4 pb-24 pt-16">
+          <p className="text-center text-sm text-kumo-subtle">
+            这条 memo 不存在或已被删除。
+          </p>
+        </main>
+      </div>
+    )
+  }
+  const detail = loadedDetail
+  const memo = detail.memo
+
   function patchMemo(patch: Partial<MemoWithTags>) {
     queryClient.setQueryData(detailOptions.queryKey, (current) =>
       current ? { ...current, memo: { ...current.memo, ...patch } } : current,
@@ -306,9 +334,9 @@ function MemoPage() {
                         </button>
                       )}
                     </div>
-                    <p className="mt-0.5 whitespace-pre-wrap break-words text-sm leading-relaxed text-kumo-default">
-                      {comment.content}
-                    </p>
+                    <div className="mt-0.5 text-sm leading-relaxed text-kumo-default">
+                      <HashtagText content={comment.content} />
+                    </div>
                   </div>
                 </div>
               ))}

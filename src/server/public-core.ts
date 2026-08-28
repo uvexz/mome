@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNull, lt, or } from 'drizzle-orm'
+import { and, count, desc, eq, inArray, isNull, lt, lte, or } from 'drizzle-orm'
 
 import { db } from '#/db'
 import { memoReposts, memos, memoTags, user } from '#/db/schema'
@@ -130,22 +130,25 @@ export async function listPublicFeed(
     repostConditions.push(eq(memos.id, ''))
   }
   if (cur?.p === 0) {
-    if (cur.k !== 'repost') {
-      const cond = or(
+    // 与合并排序保持一致（时间倒序、同刻 memo 先于 repost）：
+    // 游标同侧流用严格 keyset，另一侧流按"同刻是否已输出"收紧，否则会重复输出。
+    if (cur.k === 'memo') {
+      const memoCond = or(
         lt(memos.createdAt, new Date(cur.t)),
         and(eq(memos.createdAt, new Date(cur.t)), lt(memos.id, cur.i)),
       )
-      if (cond) memoConditions.push(cond)
-    }
-    if (cur.k !== 'memo') {
-      const cond = or(
+      if (memoCond) memoConditions.push(memoCond)
+      repostConditions.push(lte(memoReposts.createdAt, new Date(cur.t)))
+    } else {
+      const repostCond = or(
         lt(memoReposts.createdAt, new Date(cur.t)),
         and(
           eq(memoReposts.createdAt, new Date(cur.t)),
           lt(memoReposts.memoId, cur.i),
         ),
       )
-      if (cond) repostConditions.push(cond)
+      if (repostCond) repostConditions.push(repostCond)
+      memoConditions.push(lt(memos.createdAt, new Date(cur.t)))
     }
   }
 
@@ -183,7 +186,8 @@ export async function listPublicFeed(
       .from(memoReposts)
       .innerJoin(memos, eq(memos.id, memoReposts.memoId))
       .where(and(...repostConditions))
-      .orderBy(desc(memoReposts.createdAt))
+      // 与合并比较器同序：同刻按 memoId 倒序，游标平 tie 才有意义
+      .orderBy(desc(memoReposts.createdAt), desc(memoReposts.memoId))
       .limit(remaining + 1),
   ])
 

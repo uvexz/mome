@@ -1,4 +1,5 @@
 import { S3Client } from '@aws-sdk/client-s3'
+import { AppError } from './error-shield'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
@@ -68,14 +69,14 @@ export const getUploadUrl = createServerFn({ method: 'POST' })
     })
     const ext = data.ext.toLowerCase().replace(/^\./, '')
     const mime = EXT_MIME[ext]
-    if (!mime) throw new Error('不支持的文件类型')
+    if (!mime) throw new AppError('不支持的文件类型')
     if (data.kind === 'site-icon' && !(await isAdminUser(context.user.id))) {
-      throw new Error('需要管理员权限')
+      throw new AppError('需要管理员权限')
     }
 
     const s3 = await loadS3Settings()
     if (!s3.enabled) {
-      throw new Error('S3 未配置，图片上传不可用')
+      throw new AppError('S3 未配置，图片上传不可用')
     }
 
     const client = new S3Client({

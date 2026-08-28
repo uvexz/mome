@@ -1657,9 +1657,13 @@ function DangerSection() {
     setDeleting(true)
     try {
       await deleteAccountFn({ data: { password } })
-      // 清理会话 cookie 后整页跳转，确保全新未登录状态
+      // 清理会话 cookie 后整页跳转，确保全新未登录状态。
+      // 生产环境 better-auth 会话 cookie 带 __Secure- 前缀，两个名字都清；
+      // 服务端此时已吊销会话，这里只是尽快移除本地残留
       document.cookie =
         'better-auth.session_token=; Max-Age=0; path=/; SameSite=Lax'
+      document.cookie =
+        '__Secure-better-auth.session_token=; Max-Age=0; path=/; SameSite=Lax; Secure'
       window.location.href = '/signup'
     } catch (err) {
       toast.add({

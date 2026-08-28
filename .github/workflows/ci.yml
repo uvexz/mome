@@ -4,9 +4,18 @@ on:
   push:
   pull_request:
 
+# 同一 commit 的 push 与 pull_request 只跑最新一次
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       DATABASE_URL: file:/tmp/mome-ci.db
       BETTER_AUTH_URL: http://localhost:3000

@@ -1,4 +1,5 @@
 import { createMiddleware } from '@tanstack/react-start'
+import { AppError } from './error-shield'
 import { getRequest } from '@tanstack/react-start/server'
 import { redirect } from '@tanstack/react-router'
 
@@ -37,7 +38,7 @@ export const adminMiddleware = createMiddleware({ type: 'function' }).server(
       throw redirect({ to: '/login' })
     }
     if (!(await isAdminUser(session.user.id))) {
-      throw new Error('需要管理员权限')
+      throw new AppError('需要管理员权限')
     }
 
     return next({ context: { user: session.user } })

@@ -23,11 +23,18 @@ import {
   memoVersions,
   memos,
   memoTags,
+  notifications,
   tags,
 } from '#/db/schema'
-import { parseHashtags, tagPathToSegments } from '#/lib/hashtags'
+import {
+  isValidTagName,
+  parseHashtags,
+  tagPathToSegments,
+} from '#/lib/hashtags'
+import { MAX_CONTENT } from '#/lib/limits'
 import { parseMemoReferences } from '#/lib/memo-links'
 import { ulid } from '#/lib/ulid'
+import { AppError } from './error-shield'
 import {
   EMPTY_COUNTS,
   EMPTY_VIEWER_STATE,
@@ -35,8 +42,9 @@ import {
   loadViewerStates,
 } from './interactions-core'
 import type { MemoCounts, ViewerState } from './interactions-core'
+import { isAdminUser } from './settings-core'
 
-export const MAX_CONTENT = 5000
+export { MAX_CONTENT }
 
 export interface MemoWithTags {
   id: string
@@ -117,14 +125,33 @@ function chunks<T>(items: T[], size = 250): T[][] {
 async function syncImportedRelations(
   tx: Tx,
   userId: string,
-  imported: Array<{ id: string; content: string }>,
+  imported: Array<{ id: string; content: string; tags?: string[] }>,
 ): Promise<void> {
   if (imported.length === 0) return
 
-  const pathsByMemo = imported.map((memo) => ({
-    id: memo.id,
-    paths: parseHashtags(memo.content).map(tagPathToSegments),
-  }))
+  // 标签路径 = 正文 #hashtag 与导入项显式 tags（导出往返场景）的并集。
+  // 单段最长 100 字符、每条 memo 最多 20 个标签，防止超长内容撑爆标签表。
+  const pathsByMemo = imported.map((memo) => {
+    const pathKeys = new Set<string>()
+    for (const path of parseHashtags(memo.content)) pathKeys.add(path)
+    for (const tag of memo.tags ?? []) {
+      const segments = tagPathToSegments(tag)
+      if (
+        segments.length > 0 &&
+        segments.every((segment) => isValidTagName(segment))
+      ) {
+        pathKeys.add(segments.join('/'))
+      }
+    }
+    const paths: string[][] = []
+    for (const pathKey of pathKeys) {
+      const segments = tagPathToSegments(pathKey)
+      if (segments.some((segment) => segment.length > 100)) continue
+      paths.push(segments)
+      if (paths.length >= 20) break
+    }
+    return { id: memo.id, paths }
+  })
   const maxDepth = Math.max(
     0,
     ...pathsByMemo.flatMap((memo) => memo.paths.map((path) => path.length)),
@@ -142,7 +169,7 @@ async function syncImportedRelations(
         const pathKey = path.slice(0, depth + 1).join('\0')
         const parentId =
           depth === 0 ? null : tagIdByPath.get(path.slice(0, depth).join('\0'))
-        if (parentId === undefined) throw new Error('tag parent not found')
+        if (parentId === undefined) throw new AppError('tag parent not found')
         if (!candidates.has(pathKey)) {
           candidates.set(pathKey, {
             id: crypto.randomUUID(),
@@ -175,7 +202,7 @@ async function syncImportedRelations(
       const storedId = storedByParentAndName.get(
         `${candidate.parentId ?? ''}\0${candidate.name}`,
       )
-      if (!storedId) throw new Error('tag create conflict')
+      if (!storedId) throw new AppError('tag create conflict')
       tagIdByPath.set(pathKey, storedId)
     }
   }
@@ -328,7 +355,7 @@ export async function createMemoForUser(
             ),
           })
         : undefined
-      if (!existing) throw new Error('memo create conflict')
+      if (!existing) throw new AppError('memo create conflict')
       return existing
     }
     await syncRelationsForContent(tx, userId, memo.id, content)
@@ -528,26 +555,27 @@ export async function resolveTagIds(
   tagPath: string,
 ): Promise<string[]> {
   const segments = tagPathToSegments(tagPath)
+  if (segments.length === 0) return []
+  // 一次取全该用户的标签，路径匹配与后代收集都在内存完成
+  // （避免逐段查询 + 逐层 BFS 的 N+1 往返）
+  const userTags = await db
+    .select({ id: tags.id, name: tags.name, parentId: tags.parentId })
+    .from(tags)
+    .where(eq(tags.userId, userId))
+  const childrenByParent = new Map<string, string[]>()
+  for (const tag of userTags) {
+    if (tag.parentId === null) continue
+    const list = childrenByParent.get(tag.parentId) ?? []
+    list.push(tag.id)
+    childrenByParent.set(tag.parentId, list)
+  }
   let parentId: string | null = null
   for (const seg of segments) {
-    const cond: SQL | undefined =
-      parentId === null
-        ? and(
-            eq(tags.userId, userId),
-            eq(tags.name, seg),
-            isNull(tags.parentId),
-          )
-        : and(
-            eq(tags.userId, userId),
-            eq(tags.name, seg),
-            eq(tags.parentId, parentId),
-          )
-    const tag: typeof tags.$inferSelect | undefined =
-      await db.query.tags.findFirst({
-        where: cond,
-      })
-    if (!tag) return []
-    parentId = tag.id
+    const match = userTags.find(
+      (tag) => tag.name === seg && (tag.parentId ?? null) === parentId,
+    )
+    if (!match) return []
+    parentId = match.id
   }
   if (!parentId) return []
   // 收集所有层级后代（BFS，支持任意深度）
@@ -555,14 +583,10 @@ export async function resolveTagIds(
   const queue = [parentId]
   while (queue.length > 0) {
     const current = queue.shift()!
-    const children = await db
-      .select({ id: tags.id })
-      .from(tags)
-      .where(and(eq(tags.userId, userId), eq(tags.parentId, current)))
-    for (const child of children) {
-      if (!ids.has(child.id)) {
-        ids.add(child.id)
-        queue.push(child.id)
+    for (const childId of childrenByParent.get(current) ?? []) {
+      if (!ids.has(childId)) {
+        ids.add(childId)
+        queue.push(childId)
       }
     }
   }
@@ -598,7 +622,7 @@ export async function patchMemoForUser(
         isNull(memos.deletedAt),
       ),
     })
-    if (!current) throw new Error('memo not found')
+    if (!current) throw new AppError('memo not found')
     const contentChanged =
       patch.content !== undefined && patch.content !== current.content
     if (contentChanged) {
@@ -638,7 +662,7 @@ export async function patchMemoForUser(
         ),
       )
       .returning()
-    if (updated.length === 0) throw new Error('memo not found')
+    if (updated.length === 0) throw new AppError('memo not found')
     if (contentChanged) {
       await syncRelationsForContent(tx, userId, id, patch.content!)
       await cleanupOrphanTags(tx, userId)
@@ -694,7 +718,7 @@ export async function getMemoForUser(
   id: string,
 ): Promise<MemoWithTags> {
   const memo = (await loadMemosForUserByIds(userId, [id])).get(id)
-  if (!memo) throw new Error('memo not found')
+  if (!memo) throw new AppError('memo not found')
   return memo
 }
 
@@ -716,7 +740,7 @@ export async function getMemoConnectionsForUser(
     ),
     columns: { id: true },
   })
-  if (!memo) throw new Error('memo not found')
+  if (!memo) throw new AppError('memo not found')
   const [outgoingRows, backlinkRows, tagRows] = await Promise.all([
     db
       .select({ id: memoLinks.targetId })
@@ -813,23 +837,31 @@ export async function getReviewMemosForUser(
     )
   }
 
-  let query = db
-    .select()
-    .from(memos)
-    .where(and(...conditions))
-    .$dynamic()
-  query =
-    opts.mode === 'random'
-      ? query.orderBy(sql`random()`)
-      : opts.mode === 'least-reviewed'
-        ? query.orderBy(
-            sql`(SELECT count(*) FROM memo_review_events review WHERE review.memo_id = ${memos.id})`,
-            sql`(SELECT max(reviewed_at) FROM memo_review_events review WHERE review.memo_id = ${memos.id}) ASC`,
-            desc(memos.createdAt),
-          )
-        : query.orderBy(desc(memos.createdAt))
-
-  const rows = await query.limit(limit)
+  // least-reviewed 用一次性 JOIN 聚合代替按行的关联子查询（避免全表 O(n) 逐行统计）；
+  // 其余模式保持简单排序
+  let rows: Array<typeof memos.$inferSelect>
+  if (opts.mode === 'least-reviewed') {
+    const joined = await db
+      .select({ memo: memos })
+      .from(memos)
+      .leftJoin(memoReviewEvents, eq(memoReviewEvents.memoId, memos.id))
+      .where(and(...conditions))
+      .groupBy(memos.id)
+      .orderBy(
+        sql`count(${memoReviewEvents.id})`,
+        sql`max(${memoReviewEvents.reviewedAt}) asc`,
+        desc(memos.createdAt),
+      )
+      .limit(limit)
+    rows = joined.map((row) => row.memo)
+  } else {
+    rows = await db
+      .select()
+      .from(memos)
+      .where(and(...conditions))
+      .orderBy(opts.mode === 'random' ? sql`random()` : desc(memos.createdAt))
+      .limit(limit)
+  }
   if (rows.length > 0) {
     const now = new Date()
     await db.insert(memoReviewEvents).values(
@@ -875,6 +907,10 @@ export async function deleteMemoForUser(
       )
       .returning()
     deleted = res.length > 0
+    // 软删后相关通知已不可见（join 过滤 deletedAt），同步删除避免孤儿行只增不减
+    if (deleted) {
+      await tx.delete(notifications).where(eq(notifications.memoId, id))
+    }
   })
   return { deleted }
 }
@@ -957,7 +993,7 @@ export async function restoreMemoVersionForUser(
       eq(memoVersions.userId, userId),
     ),
   })
-  if (!version) throw new Error('memo version not found')
+  if (!version) throw new AppError('memo version not found')
   return updateMemoForUser(userId, memoId, version.content)
 }
 
@@ -974,7 +1010,7 @@ export async function togglePinForUser(
     ),
     columns: { pinned: true },
   })
-  if (!memo) throw new Error('memo not found')
+  if (!memo) throw new AppError('memo not found')
   return setPinForUser(userId, id, !memo.pinned)
 }
 
@@ -989,7 +1025,7 @@ export async function toggleArchiveForUser(
       isNull(memos.deletedAt),
     ),
   })
-  if (!memo) throw new Error('memo not found')
+  if (!memo) throw new AppError('memo not found')
   const nextArchived = !memo.archived
   const [updated] = await db
     .update(memos)
@@ -1017,7 +1053,7 @@ export async function setVisibilityForUser(
       isNull(memos.deletedAt),
     ),
   })
-  if (!memo) throw new Error('memo not found')
+  if (!memo) throw new AppError('memo not found')
   const [updated] = await db
     .update(memos)
     .set({
@@ -1046,7 +1082,7 @@ export async function setPinForUser(
       ),
       columns: { id: true, pinned: true },
     })
-    if (!memo) throw new Error('memo not found')
+    if (!memo) throw new AppError('memo not found')
     if (memo.pinned === pinned) return { pinned }
 
     const now = new Date()
@@ -1066,8 +1102,13 @@ export async function setPinForUser(
 }
 
 export async function toggleGlobalPinForAdmin(
+  actorId: string,
   id: string,
 ): Promise<{ globalPinned: boolean }> {
+  // 核心层自查权限：不依赖唯一调用点的 adminMiddleware，未来新增调用点漏挂也不越权
+  if (!(await isAdminUser(actorId))) {
+    throw new AppError('需要管理员权限')
+  }
   return db.transaction(async (tx) => {
     const memo = await tx.query.memos.findFirst({
       where: and(eq(memos.id, id), isNull(memos.deletedAt)),
@@ -1078,11 +1119,11 @@ export async function toggleGlobalPinForAdmin(
         globalPinned: true,
       },
     })
-    if (!memo) throw new Error('memo not found')
+    if (!memo) throw new AppError('memo not found')
 
     const globalPinned = !memo.globalPinned
     if (globalPinned && (memo.visibility !== 'public' || memo.archived)) {
-      throw new Error('只能全局置顶公开且未归档的 memo')
+      throw new AppError('只能全局置顶公开且未归档的 memo')
     }
 
     const now = new Date()
@@ -1117,7 +1158,7 @@ export async function setArchiveForUser(
       and(eq(memos.id, id), eq(memos.userId, userId), isNull(memos.deletedAt)),
     )
     .returning()
-  if (updated.length === 0) throw new Error('memo not found')
+  if (updated.length === 0) throw new AppError('memo not found')
   return { archived: updated[0].archived }
 }
 
@@ -1153,11 +1194,30 @@ export async function exportMemosForUser(
     .where(and(eq(memos.userId, userId), isNull(memos.deletedAt)))
     .orderBy(asc(memos.createdAt))
   const tagRows = await loadMemoTags(rows.map((m) => m.id))
-  const tagByMemo = new Map<string, string[]>()
+  // 还原完整层级路径（如 `rust/ownership`）：导出的 tags 按 #标签 语法可被导入端无损重建
+  const userTags = await db
+    .select({ id: tags.id, name: tags.name, parentId: tags.parentId })
+    .from(tags)
+    .where(eq(tags.userId, userId))
+  const tagById = new Map(userTags.map((tag) => [tag.id, tag]))
+  const pathByTagId = new Map<string, string>()
+  const tagPath = (tagId: string): string => {
+    const cached = pathByTagId.get(tagId)
+    if (cached !== undefined) return cached
+    const tag = tagById.get(tagId)
+    if (!tag) return ''
+    const parentPath = tag.parentId ? tagPath(tag.parentId) : ''
+    const path = parentPath ? `${parentPath}/${tag.name}` : tag.name
+    pathByTagId.set(tagId, path)
+    return path
+  }
+  const tagPathsByMemo = new Map<string, string[]>()
   for (const t of tagRows) {
-    const list = tagByMemo.get(t.memoId) ?? []
-    list.push(t.tagName)
-    tagByMemo.set(t.memoId, list)
+    const path = tagPath(t.tagId)
+    if (!path) continue
+    const list = tagPathsByMemo.get(t.memoId) ?? []
+    if (!list.includes(path)) list.push(path)
+    tagPathsByMemo.set(t.memoId, list)
   }
   return rows.map((m) => ({
     id: m.id,
@@ -1167,7 +1227,7 @@ export async function exportMemosForUser(
     archived: m.archived,
     createdAt: m.createdAt.toISOString(),
     updatedAt: m.updatedAt.toISOString(),
-    tags: tagByMemo.get(m.id) ?? [],
+    tags: tagPathsByMemo.get(m.id) ?? [],
   }))
 }
 
@@ -1226,7 +1286,11 @@ export async function importMemosForUser(
     await syncImportedRelations(
       tx,
       userId,
-      accepted.map(({ memo }) => ({ id: memo.id, content: memo.content })),
+      accepted.map(({ item, memo }) => ({
+        id: memo.id,
+        content: memo.content,
+        tags: item.tags,
+      })),
     )
 
     const requestedPinId = [...accepted]

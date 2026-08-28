@@ -9,6 +9,8 @@ export interface QueuedMemo {
   content: string
   visibility: 'public' | 'private'
   createdAt: number
+  /** 在线重发失败次数；超过上限的"毒丸"条目会被丢弃而非无限重试 */
+  attempts?: number
 }
 
 const DB_NAME = 'mome-client'
@@ -103,6 +105,22 @@ export async function removeQueuedMemo(id: string): Promise<void> {
   try {
     const transaction = db.transaction('outbox', 'readwrite')
     await requestResult(transaction.objectStore('outbox').delete(id))
+  } finally {
+    db.close()
+  }
+}
+
+/** 在线重发失败后累加计数，返回最新次数 */
+export async function incrementQueuedMemoAttempts(id: string): Promise<number> {
+  const db = await openDb()
+  try {
+    const transaction = db.transaction('outbox', 'readwrite')
+    const store = transaction.objectStore('outbox')
+    const item = (await requestResult(store.get(id))) as QueuedMemo | undefined
+    if (!item) return 0
+    const attempts = (item.attempts ?? 0) + 1
+    await requestResult(store.put({ ...item, attempts }))
+    return attempts
   } finally {
     db.close()
   }

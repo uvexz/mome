@@ -36,10 +36,18 @@ function NotificationsPage() {
   const items = query.data?.pages.flatMap((page) => page.items) ?? []
 
   useEffect(() => {
-    queryClient.setQueryData([...queryKeys.notifications, 'unread'], {
-      count: 0,
-    })
+    // 服务端确认已读后再清零徽标；失败时拉回真实未读数，避免徽标与状态不一致
     void markNotificationsRead({ data: { all: true } })
+      .then(() => {
+        queryClient.setQueryData([...queryKeys.notifications, 'unread'], {
+          count: 0,
+        })
+      })
+      .catch(() => {
+        void queryClient.invalidateQueries({
+          queryKey: [...queryKeys.notifications, 'unread'],
+        })
+      })
   }, [queryClient])
 
   return (

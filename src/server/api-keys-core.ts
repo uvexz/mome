@@ -1,4 +1,5 @@
-import { and, desc, eq, isNull, lt, or } from 'drizzle-orm'
+import { and, count, desc, eq, isNull, lt, or } from 'drizzle-orm'
+import { AppError } from './error-shield'
 
 import { db } from '#/db'
 import { apiKeys, user } from '#/db/schema'
@@ -8,6 +9,9 @@ import {
   hashApiKeyToken,
 } from '#/lib/api-keys'
 import { ulid } from '#/lib/ulid'
+
+/** 每个用户最多可持有的未撤销 API key 数量 */
+const MAX_API_KEYS_PER_USER = 20
 
 export interface ApiKeyItem {
   id: string
@@ -44,6 +48,15 @@ export async function createApiKeyForUser(
   name: string,
   opts: { expiresAt?: Date | null } = {},
 ): Promise<{ key: ApiKeyItem; token: string }> {
+  const [{ total }] = await db
+    .select({ total: count() })
+    .from(apiKeys)
+    .where(and(eq(apiKeys.userId, userId), isNull(apiKeys.revokedAt)))
+  if (total >= MAX_API_KEYS_PER_USER) {
+    throw new AppError(
+      `最多创建 ${MAX_API_KEYS_PER_USER} 个 API key，请先撤销不再使用的 key`,
+    )
+  }
   const token = generateApiKeyToken()
   const key = {
     id: ulid(),
@@ -87,7 +100,7 @@ export async function revokeApiKeyForUser(
     )
     .returning()
   if (updated.length === 0) {
-    throw new Error('API key not found')
+    throw new AppError('API key not found')
   }
 }
 

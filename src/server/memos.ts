@@ -57,7 +57,7 @@ export const listHomeFeed = createServerFn({ method: 'GET' })
     z.object({
       cursor: z.string().max(256).optional(),
       limit: z.number().int().min(1).max(50).default(20),
-      tag: z.string().optional(),
+      tag: z.string().max(200).optional(),
       q: z.string().max(200).optional(),
       filter: z.enum(['all', 'archived', 'deleted']).optional(),
       visibility: z.enum(['public', 'private']).optional(),

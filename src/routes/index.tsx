@@ -4,7 +4,7 @@ import {
   useNavigate,
   useSearch,
 } from '@tanstack/react-router'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -57,6 +57,18 @@ export const Route = createFileRoute('/')({
   component: Home,
 })
 
+/**
+ * 返回引用稳定的回调（内部始终调用最新实现）。
+ * 列表页每帧都会重建内联 handler，直接传给 memo(MemoCard) 会令 memo 失效。
+ */
+function useStableCallback<TArgs extends unknown[], TReturn>(
+  fn: (...args: TArgs) => TReturn,
+): (...args: TArgs) => TReturn {
+  const ref = useRef(fn)
+  ref.current = fn
+  return useCallback((...args: TArgs) => ref.current(...args), [])
+}
+
 function Home() {
   const search = useSearch({ from: '/' })
   const navigate = useNavigate()
@@ -65,7 +77,10 @@ function Home() {
   const tzOffsetMinutes = new Date().getTimezoneOffset()
   const feedOptions = homeFeedQueryOptions({ ...search, tzOffsetMinutes })
   const feed = useInfiniteQuery(feedOptions)
-  const items = feed.data?.pages.flatMap((page) => page.items) ?? []
+  const items = useMemo(
+    () => feed.data?.pages.flatMap((page) => page.items) ?? [],
+    [feed.data],
+  )
   const tagsQuery = useQuery(tagsQueryOptions())
   const statsQuery = useQuery(statsQueryOptions(tzOffsetMinutes))
   const [contributionMonth, setContributionMonth] = useState<string>()
@@ -379,6 +394,43 @@ function Home() {
     })
   }
 
+  // ── 传给列表的稳定回调：引用稳定，避免整列表 memo(MemoCard) 失效 ──
+  const onTogglePinStable = useStableCallback(
+    (memo: MemoWithTags) => void handleTogglePin(memo),
+  )
+  const onToggleArchiveStable = useStableCallback(
+    (memo: MemoWithTags) => void handleToggleArchive(memo),
+  )
+  const onRestoreStable = useStableCallback(
+    (memo: MemoWithTags) => void handleRestore(memo),
+  )
+  const onToggleVisibilityStable = useStableCallback(
+    (memo: MemoWithTags) => void handleToggleVisibility(memo),
+  )
+  const onLikeStable = useStableCallback(
+    (memo: MemoWithTags) => void handleLike(memo),
+  )
+  const onFavoriteStable = useStableCallback(
+    (memo: MemoWithTags) => void handleFavorite(memo),
+  )
+  const onEditStable = useStableCallback((memo: MemoWithTags) => {
+    setEditing(memo)
+    setEditOpen(true)
+  })
+  const onDeleteStable = useStableCallback((memo: MemoWithTags) => {
+    setDeleting(memo)
+    setDeleteOpen(true)
+  })
+  const onCommentStable = useStableCallback((memo: MemoWithTags) => {
+    setCommenting(memo)
+    setCommentOpen(true)
+  })
+  const onRepostStable = useStableCallback((memo: MemoWithTags) => {
+    setReposting(memo)
+    setRepostOpen(true)
+  })
+  const onFilterStable = useStableCallback(() => setFiltersOpen(true))
+
   const archivedView = search.filter === 'archived'
   const deletedView = search.filter === 'deleted'
 
@@ -453,33 +505,18 @@ function Home() {
               hasMore={hasMore}
               loading={loading}
               onLoadMore={loadMore}
-              onTogglePin={(m) => void handleTogglePin(m)}
-              onEdit={(m) => {
-                setEditing(m)
-                setEditOpen(true)
-              }}
-              onToggleArchive={(m) => void handleToggleArchive(m)}
-              onDelete={(m) => {
-                setDeleting(m)
-                setDeleteOpen(true)
-              }}
-              onRestore={(m) => void handleRestore(m)}
-              onPurge={(m) => {
-                setDeleting(m)
-                setDeleteOpen(true)
-              }}
-              onToggleVisibility={(m) => void handleToggleVisibility(m)}
-              onLike={(m) => void handleLike(m)}
-              onFavorite={(m) => void handleFavorite(m)}
-              onComment={(m) => {
-                setCommenting(m)
-                setCommentOpen(true)
-              }}
-              onRepost={(m) => {
-                setReposting(m)
-                setRepostOpen(true)
-              }}
-              onFilter={() => setFiltersOpen(true)}
+              onTogglePin={onTogglePinStable}
+              onEdit={onEditStable}
+              onToggleArchive={onToggleArchiveStable}
+              onDelete={onDeleteStable}
+              onRestore={onRestoreStable}
+              onPurge={onDeleteStable}
+              onToggleVisibility={onToggleVisibilityStable}
+              onLike={onLikeStable}
+              onFavorite={onFavoriteStable}
+              onComment={onCommentStable}
+              onRepost={onRepostStable}
+              onFilter={onFilterStable}
               filterActive={hasContentFilters}
             />
           )}

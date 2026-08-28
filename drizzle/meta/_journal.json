@@ -85,6 +85,13 @@
       "when": 1787321271575,
       "tag": "0011_square_inhumans",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1787923192203,
+      "tag": "0012_powerful_captain_marvel",
+      "breakpoints": true
     }
   ]
 }

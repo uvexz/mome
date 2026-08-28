@@ -13,6 +13,7 @@ import {
 import { MemoCard } from '#/components/memo-card'
 import { MemoCommentsDialog } from '#/components/memo-comments-dialog'
 import { RepostDialog } from '#/components/repost-dialog'
+import { HashtagText } from '#/components/hashtag-text'
 import { relativeTime } from '#/lib/date'
 import { cn } from '#/lib/utils'
 import {
@@ -247,8 +248,8 @@ function InteractionsPage() {
                     </time>
                   </div>
                   {item.content && (
-                    <div className="whitespace-pre-wrap rounded-lg bg-kumo-tint px-4 py-2.5 text-sm text-kumo-subtle">
-                      {item.content}
+                    <div className="rounded-lg bg-kumo-tint px-4 py-2.5 text-sm text-kumo-subtle">
+                      <HashtagText content={item.content} />
                     </div>
                   )}
                   <MemoCard

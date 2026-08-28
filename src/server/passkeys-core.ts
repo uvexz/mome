@@ -1,4 +1,5 @@
 import { and, desc, eq } from 'drizzle-orm'
+import { AppError } from './error-shield'
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -108,7 +109,7 @@ export async function verifyPasskeyRegistration(
 ): Promise<PasskeyItem[]> {
   const identifier = `passkey-register:${userId}:${challengeId}`
   const expectedChallenge = await takeChallenge(identifier)
-  if (!expectedChallenge) throw new Error('challenge expired, 请重试')
+  if (!expectedChallenge) throw new AppError('challenge expired, 请重试')
 
   const verificationResult = await verifyRegistrationResponse({
     response,
@@ -117,7 +118,7 @@ export async function verifyPasskeyRegistration(
     expectedRPID: webauthnConfig.rpID,
   })
   if (!verificationResult.verified) {
-    throw new Error('passkey 校验失败')
+    throw new AppError('passkey 校验失败')
   }
   const { credential } = verificationResult.registrationInfo
   await db.insert(passkeys).values({
@@ -153,18 +154,18 @@ export async function verifyPasskeyLogin(
   response: AuthenticationResponseJSON,
 ): Promise<{ token: string; user: { id: string; name: string } }> {
   const expectedChallenge = await takeChallenge(`passkey-login:${challengeId}`)
-  if (!expectedChallenge) throw new Error('challenge expired, 请重试')
+  if (!expectedChallenge) throw new AppError('challenge expired, 请重试')
 
   const passkey = await db.query.passkeys.findFirst({
     where: eq(passkeys.id, response.id),
   })
-  if (!passkey) throw new Error('passkey not found')
+  if (!passkey) throw new AppError('passkey not found')
   if (
     response.response.userHandle &&
     response.response.userHandle !==
       Buffer.from(passkey.userId).toString('base64url')
   ) {
-    throw new Error('passkey mismatch')
+    throw new AppError('passkey mismatch')
   }
 
   const result = await verifyAuthenticationResponse({
@@ -179,7 +180,7 @@ export async function verifyPasskeyLogin(
       transports: parseTransports(passkey.transports),
     },
   })
-  if (!result.verified) throw new Error('passkey 校验失败')
+  if (!result.verified) throw new AppError('passkey 校验失败')
 
   const authCtx = await auth.$context
   const tokenBytes = new Uint8Array(32)
@@ -201,7 +202,7 @@ export async function verifyPasskeyLogin(
         and(eq(passkeys.id, passkey.id), eq(passkeys.counter, passkey.counter)),
       )
       .returning({ id: passkeys.id })
-    if (updated.length !== 1) throw new Error('passkey 已被使用，请重试')
+    if (updated.length !== 1) throw new AppError('passkey 已被使用，请重试')
 
     await tx.insert(session).values({
       id: ulid(),
