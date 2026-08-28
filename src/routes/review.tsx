@@ -137,7 +137,7 @@ function Review() {
             {items.map((memo) => (
               <article
                 key={memo.id}
-                className="rounded-lg bg-kumo-base px-5 py-4 ring ring-kumo-line"
+                className="min-w-0 rounded-lg bg-kumo-base px-5 py-4 ring ring-kumo-line"
               >
                 <div className="text-sm leading-relaxed text-kumo-default">
                   <HashtagText

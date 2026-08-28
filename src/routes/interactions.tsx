@@ -232,7 +232,7 @@ function InteractionsPage() {
               {items.map((item) => (
                 <div
                   key={`${item.kind}-${item.memo.id}`}
-                  className="grid gap-2"
+                  className="grid min-w-0 gap-2"
                 >
                   <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 pl-5 text-xs text-kumo-subtle">
                     <span className="font-medium">{activeTab.actionLabel}</span>
