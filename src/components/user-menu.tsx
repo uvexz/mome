@@ -88,7 +88,7 @@ export function UserMenu() {
                 })
               }
             >
-              我的主页
+              主页
             </DropdownMenu.Item>
           )}
           <DropdownMenu.Item
@@ -116,37 +116,7 @@ export function UserMenu() {
             互动
           </DropdownMenu.Item>
           <DropdownMenu.Item
-            icon={<GearSix size={15} />}
-            onClick={() => void navigate({ to: '/settings' })}
-          >
-            设置
-          </DropdownMenu.Item>
-          {showAdmin && (
-            <DropdownMenu.Item
-              icon={<ShieldCheck size={15} />}
-              onClick={() => void navigate({ to: '/admin' })}
-            >
-              管理
-            </DropdownMenu.Item>
-          )}
-        </DropdownMenu.Group>
-
-        <DropdownMenu.Separator />
-        <DropdownMenu.Group className="flex items-center gap-1">
-          <DropdownMenu.Item
-            icon={<SignOut size={16} className="mr-0" />}
-            aria-label="退出登录"
-            title="退出登录"
-            className="mr-auto size-8 justify-center p-0"
-            onClick={() => void handleSignOut()}
-          >
-            <span className="sr-only">退出登录</span>
-          </DropdownMenu.Item>
-          <DropdownMenu.Item
             icon={<Archive size={15} />}
-            aria-label="归档"
-            title="归档"
-            className="size-8 justify-center p-0"
             onClick={() =>
               void navigate({
                 to: '/',
@@ -154,13 +124,10 @@ export function UserMenu() {
               })
             }
           >
-            <span className="sr-only">归档</span>
+            归档
           </DropdownMenu.Item>
           <DropdownMenu.Item
             icon={<Trash size={15} />}
-            aria-label="回收站"
-            title="回收站"
-            className="size-8 justify-center p-0"
             onClick={() =>
               void navigate({
                 to: '/',
@@ -168,7 +135,40 @@ export function UserMenu() {
               })
             }
           >
-            <span className="sr-only">回收站</span>
+            废纸
+          </DropdownMenu.Item>
+        </DropdownMenu.Group>
+
+        <DropdownMenu.Separator />
+        <DropdownMenu.Group className="flex items-center gap-1">
+          <DropdownMenu.Item
+            icon={<GearSix size={16} className="mr-0" />}
+            aria-label="设置"
+            title="设置"
+            className="size-8 justify-center p-0"
+            onClick={() => void navigate({ to: '/settings' })}
+          >
+            <span className="sr-only">设置</span>
+          </DropdownMenu.Item>
+          {showAdmin && (
+            <DropdownMenu.Item
+              icon={<ShieldCheck size={16} className="mr-0" />}
+              aria-label="管理"
+              title="管理"
+              className="size-8 justify-center p-0"
+              onClick={() => void navigate({ to: '/admin' })}
+            >
+              <span className="sr-only">管理</span>
+            </DropdownMenu.Item>
+          )}
+          <DropdownMenu.Item
+            icon={<SignOut size={16} className="mr-0" />}
+            aria-label="退出登录"
+            title="退出登录"
+            className="ml-auto size-8 justify-center p-0"
+            onClick={() => void handleSignOut()}
+          >
+            <span className="sr-only">退出登录</span>
           </DropdownMenu.Item>
         </DropdownMenu.Group>
       </DropdownMenu.Content>

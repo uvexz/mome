@@ -110,7 +110,7 @@ const markdownComponents: Components = {
     </code>
   ),
   pre: ({ children }) => (
-    <pre className="my-2 overflow-x-auto rounded-lg bg-kumo-tint p-3 font-mono text-[0.9em] text-kumo-default [&_code]:bg-transparent [&_code]:p-0">
+    <pre className="my-2 w-0 min-w-full overflow-x-auto rounded-lg bg-kumo-tint p-3 font-mono text-[0.9em] text-kumo-default [&_code]:bg-transparent [&_code]:p-0">
       {children}
     </pre>
   ),
@@ -136,7 +136,7 @@ const markdownComponents: Components = {
     />
   ),
   table: ({ children }) => (
-    <div className="my-2 overflow-x-auto">
+    <div className="my-2 w-0 min-w-full overflow-x-auto">
       <table className="w-full text-sm">{children}</table>
     </div>
   ),

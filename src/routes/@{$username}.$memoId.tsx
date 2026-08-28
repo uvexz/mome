@@ -299,7 +299,7 @@ function MemoPage() {
               还没有评论。
             </p>
           ) : (
-            <div className="grid gap-4">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
               {comments.map((comment) => (
                 <div
                   key={comment.id}

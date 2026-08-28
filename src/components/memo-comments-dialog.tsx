@@ -161,7 +161,7 @@ export function MemoCommentsDialog({
               还没有评论，来抢沙发。
             </p>
           ) : (
-            <div className="grid gap-4">
+            <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
               {items.map((comment) => (
                 <div
                   key={comment.id}

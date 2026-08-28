@@ -133,7 +133,7 @@ function Review() {
             当前范围内没有可回顾的 memo。
           </p>
         ) : (
-          <div className="mt-6 grid gap-2">
+          <div className="mt-6 grid grid-cols-[minmax(0,1fr)] gap-2">
             {items.map((memo) => (
               <article
                 key={memo.id}
