@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Button, Loader, useKumoToastManager } from '@cloudflare/kumo'
 import {
@@ -21,6 +21,7 @@ import {
   mapInfiniteItems,
   queryKeys,
 } from '#/lib/queries'
+import { useStableCallback } from '#/lib/use-stable-callback'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import type { MemoCounts } from '#/server/interactions-core'
 import type { MemoWithTags } from '#/server/memos'
@@ -83,7 +84,10 @@ function InteractionsPage() {
   const [tab, setTab] = useState<InteractionKind>('likes')
   const options = interactionsQueryOptions(tab)
   const query = useInfiniteQuery(options)
-  const items = query.data?.pages.flatMap((page) => page.items) ?? []
+  const items = useMemo(
+    () => query.data?.pages.flatMap((page) => page.items) ?? [],
+    [query.data],
+  )
   const [commenting, setCommenting] = useState<MemoWithTags | null>(null)
   const [commentOpen, setCommentOpen] = useState(false)
   const [reposting, setReposting] = useState<MemoWithTags | null>(null)
@@ -180,6 +184,21 @@ function InteractionsPage() {
     })
   }
 
+  const onLike = useStableCallback(
+    (memo: MemoWithTags) => void handleLike(memo),
+  )
+  const onFavorite = useStableCallback(
+    (memo: MemoWithTags) => void handleFavorite(memo),
+  )
+  const onComment = useStableCallback((memo: MemoWithTags) => {
+    setCommenting(memo)
+    setCommentOpen(true)
+  })
+  const onRepost = useStableCallback((memo: MemoWithTags) => {
+    setReposting(memo)
+    setRepostOpen(true)
+  })
+
   const activeTab = TABS.find((t) => t.key === tab) ?? TABS[0]
 
   return (
@@ -255,16 +274,10 @@ function InteractionsPage() {
                   <MemoCard
                     memo={item.memo}
                     author={item.author}
-                    onLike={(m) => void handleLike(m)}
-                    onFavorite={(m) => void handleFavorite(m)}
-                    onComment={(m) => {
-                      setCommenting(m)
-                      setCommentOpen(true)
-                    }}
-                    onRepost={(m) => {
-                      setReposting(m)
-                      setRepostOpen(true)
-                    }}
+                    onLike={onLike}
+                    onFavorite={onFavorite}
+                    onComment={onComment}
+                    onRepost={onRepost}
                   />
                 </div>
               ))}

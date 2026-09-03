@@ -318,6 +318,7 @@ export const memoReviewEvents = sqliteTable(
   },
   (t) => [
     index('memo_review_events_user_reviewed_idx').on(t.userId, t.reviewedAt),
+    index('memo_review_events_user_memo_idx').on(t.userId, t.memoId),
     index('memo_review_events_memo_reviewed_idx').on(t.memoId, t.reviewedAt),
   ],
 )

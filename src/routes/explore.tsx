@@ -1,5 +1,5 @@
 import { createFileRoute, useNavigate, useSearch } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import {
   useQueryClient,
   useSuspenseInfiniteQuery,
@@ -22,6 +22,7 @@ import {
   publicTimelineQueryOptions,
   queryKeys,
 } from '#/lib/queries'
+import { useStableCallback } from '#/lib/use-stable-callback'
 import { toggleGlobalPin } from '#/server/admin'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import type { MemoCounts } from '#/server/interactions-core'
@@ -53,7 +54,10 @@ function ExplorePage() {
   const { data: gate } = useSuspenseQuery(adminGateQueryOptions())
   const timelineOptions = publicTimelineQueryOptions(search.tag)
   const timeline = useSuspenseInfiniteQuery(timelineOptions)
-  const items = timeline.data.pages.flatMap((page) => page.items)
+  const items = useMemo(
+    () => timeline.data.pages.flatMap((page) => page.items),
+    [timeline.data],
+  )
   const { data: session } = authClient.useSession()
   const [commenting, setCommenting] = useState<MemoWithTags | null>(null)
   const [commentOpen, setCommentOpen] = useState(false)
@@ -176,6 +180,21 @@ function ExplorePage() {
     })
   }
 
+  const onToggleGlobalPin = useStableCallback(
+    (memo: MemoWithTags) => void handleToggleGlobalPin(memo),
+  )
+  const onTagClick = useStableCallback((tag: string) => updateTag(tag))
+  const onLike = useStableCallback(
+    (memo: MemoWithTags) => void handleLike(memo),
+  )
+  const onFavorite = useStableCallback(
+    (memo: MemoWithTags) => void handleFavorite(memo),
+  )
+  const onComment = useStableCallback((memo: MemoWithTags) =>
+    handleComment(memo),
+  )
+  const onRepost = useStableCallback((memo: MemoWithTags) => handleRepost(memo))
+
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-40 border-b border-kumo-line bg-kumo-canvas/85 backdrop-blur">
@@ -287,16 +306,12 @@ function ExplorePage() {
                 repost={item.repost}
                 hideVisibility
                 showUserPin={false}
-                onToggleGlobalPin={
-                  gate.isAdmin
-                    ? (m) => void handleToggleGlobalPin(m)
-                    : undefined
-                }
-                onTagClick={(tag) => updateTag(tag)}
-                onLike={(m) => void handleLike(m)}
-                onFavorite={(m) => void handleFavorite(m)}
-                onComment={handleComment}
-                onRepost={handleRepost}
+                onToggleGlobalPin={gate.isAdmin ? onToggleGlobalPin : undefined}
+                onTagClick={onTagClick}
+                onLike={onLike}
+                onFavorite={onFavorite}
+                onComment={onComment}
+                onRepost={onRepost}
               />
             ))}
           </div>

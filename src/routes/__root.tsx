@@ -17,6 +17,7 @@ import { Button, LinkButton, Toasty } from '@cloudflare/kumo'
 import { authClient } from '#/lib/auth-client'
 import type { RouterContext } from '#/lib/query-client'
 import { appConfigQueryOptions } from '#/lib/queries'
+import { SessionUsernameProvider } from '#/lib/session-context'
 import { ServiceWorkerRegister } from '#/components/service-worker-register'
 
 import '@fontsource-variable/geist'
@@ -94,7 +95,11 @@ function QuerySessionBoundary({ children }: { children: React.ReactNode }) {
     previousUserId.current = userId
   }, [isPending, queryClient, session?.user.id])
 
-  return children
+  return (
+    <SessionUsernameProvider username={session?.user.username ?? null}>
+      {children}
+    </SessionUsernameProvider>
+  )
 }
 
 function DeveloperTools() {

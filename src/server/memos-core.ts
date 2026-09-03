@@ -297,14 +297,26 @@ async function cleanupOrphanTags(tx: Tx, userId: string): Promise<void> {
   }
 }
 
-export async function loadMemoTags(memoIds: string[]): Promise<
-  Array<{
-    memoId: string
-    tagId: string
-    tagName: string
-    parentId: string | null
-  }>
-> {
+export type MemoTagRow = {
+  memoId: string
+  tagId: string
+  tagName: string
+  parentId: string | null
+}
+
+export function groupMemoTags(
+  tagRows: MemoTagRow[],
+): Map<string, MemoTagRow[]> {
+  const tagsByMemo = new Map<string, MemoTagRow[]>()
+  for (const tag of tagRows) {
+    const list = tagsByMemo.get(tag.memoId)
+    if (list) list.push(tag)
+    else tagsByMemo.set(tag.memoId, [tag])
+  }
+  return tagsByMemo
+}
+
+export async function loadMemoTags(memoIds: string[]): Promise<MemoTagRow[]> {
   if (memoIds.length === 0) return []
   const rows = await db
     .select({
@@ -556,41 +568,40 @@ export async function resolveTagIds(
 ): Promise<string[]> {
   const segments = tagPathToSegments(tagPath)
   if (segments.length === 0) return []
-  // 一次取全该用户的标签，路径匹配与后代收集都在内存完成
-  // （避免逐段查询 + 逐层 BFS 的 N+1 往返）
-  const userTags = await db
-    .select({ id: tags.id, name: tags.name, parentId: tags.parentId })
-    .from(tags)
-    .where(eq(tags.userId, userId))
-  const childrenByParent = new Map<string, string[]>()
-  for (const tag of userTags) {
-    if (tag.parentId === null) continue
-    const list = childrenByParent.get(tag.parentId) ?? []
-    list.push(tag.id)
-    childrenByParent.set(tag.parentId, list)
-  }
-  let parentId: string | null = null
-  for (const seg of segments) {
-    const match = userTags.find(
-      (tag) => tag.name === seg && (tag.parentId ?? null) === parentId,
+  // Resolve the path and descendants in SQLite. This keeps the operation to
+  // one remote round trip and avoids loading every tag owned by a large user.
+  const nextSegmentConditions: SQL[] = [sql`0`]
+  for (let depth = 1; depth < segments.length; depth++) {
+    nextSegmentConditions.push(
+      sql`(tag_path.depth = ${depth} AND ${tags.name} = ${segments[depth]})`,
     )
-    if (!match) return []
-    parentId = match.id
   }
-  if (!parentId) return []
-  // 收集所有层级后代（BFS，支持任意深度）
-  const ids = new Set<string>([parentId])
-  const queue = [parentId]
-  while (queue.length > 0) {
-    const current = queue.shift()!
-    for (const childId of childrenByParent.get(current) ?? []) {
-      if (!ids.has(childId)) {
-        ids.add(childId)
-        queue.push(childId)
-      }
-    }
-  }
-  return [...ids]
+  const rows = await db.all<{ tag_id: string }>(sql`
+    WITH RECURSIVE
+      tag_path(id, depth) AS (
+        SELECT ${tags.id}, 1
+        FROM ${tags}
+        WHERE ${tags.userId} = ${userId}
+          AND ${tags.parentId} IS NULL
+          AND ${tags.name} = ${segments[0]}
+        UNION ALL
+        SELECT ${tags.id}, tag_path.depth + 1
+        FROM ${tags}
+        INNER JOIN tag_path ON ${tags.parentId} = tag_path.id
+        WHERE ${tags.userId} = ${userId}
+          AND (${sql.join(nextSegmentConditions, sql` OR `)})
+      ),
+      descendants(id) AS (
+        SELECT id FROM tag_path WHERE depth = ${segments.length}
+        UNION
+        SELECT ${tags.id}
+        FROM ${tags}
+        INNER JOIN descendants ON ${tags.parentId} = descendants.id
+        WHERE ${tags.userId} = ${userId}
+      )
+    SELECT id AS tag_id FROM descendants
+  `)
+  return rows.map((row) => row.tag_id)
 }
 
 // ── update ───────────────────────────────────────────────
@@ -694,12 +705,7 @@ async function loadMemosForUserByIds(
     loadMemoCounts(uniqueIds),
     loadViewerStates(uniqueIds, userId),
   ])
-  const tagsByMemo = new Map<string, typeof tagRows>()
-  for (const tag of tagRows) {
-    const list = tagsByMemo.get(tag.memoId) ?? []
-    list.push(tag)
-    tagsByMemo.set(tag.memoId, list)
-  }
+  const tagsByMemo = groupMemoTags(tagRows)
   return new Map(
     rows.map((memo) => [
       memo.id,
@@ -844,7 +850,13 @@ export async function getReviewMemosForUser(
     const joined = await db
       .select({ memo: memos })
       .from(memos)
-      .leftJoin(memoReviewEvents, eq(memoReviewEvents.memoId, memos.id))
+      .leftJoin(
+        memoReviewEvents,
+        and(
+          eq(memoReviewEvents.memoId, memos.id),
+          eq(memoReviewEvents.userId, userId),
+        ),
+      )
       .where(and(...conditions))
       .groupBy(memos.id)
       .orderBy(
@@ -874,12 +886,8 @@ export async function getReviewMemosForUser(
     )
   }
   const tagData = await loadMemoTags(rows.map((memo) => memo.id))
-  return rows.map((memo) =>
-    toMemoWithTags(
-      memo,
-      tagData.filter((tag) => tag.memoId === memo.id),
-    ),
-  )
+  const tagsByMemo = groupMemoTags(tagData)
+  return rows.map((memo) => toMemoWithTags(memo, tagsByMemo.get(memo.id) ?? []))
 }
 
 // ── delete ───────────────────────────────────────────────

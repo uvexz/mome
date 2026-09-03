@@ -1,0 +1,1 @@
+CREATE INDEX `memo_review_events_user_memo_idx` ON `memo_review_events` (`user_id`,`memo_id`);

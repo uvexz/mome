@@ -1,5 +1,5 @@
-import { memo as memoize } from 'react'
 import type { ReactNode } from 'react'
+import { memo as memoize } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import {
   ArrowBendUpRight,
@@ -8,7 +8,7 @@ import {
   PushPin,
 } from '@phosphor-icons/react'
 
-import { authClient } from '#/lib/auth-client'
+import { useSessionUsername } from '#/lib/session-context'
 import type { MemoWithTags } from '#/server/memos'
 import type { MemoAuthor, RepostContext } from '#/server/timeline-core'
 import { relativeTime } from '#/lib/date'
@@ -69,10 +69,9 @@ export const MemoCard = memoize(function MemoCard({
   showUserPin = true,
 }: MemoCardProps) {
   const navigate = useNavigate()
-  const { data: session } = authClient.useSession()
-  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- session 可能为 null
-  const myUsername = session?.user?.username
-  const username = author?.username ?? profileUsername ?? myUsername
+  const myUsername = useSessionUsername()
+  const username =
+    author?.username ?? profileUsername ?? myUsername ?? undefined
 
   function openMemoPage() {
     if (deleted) return

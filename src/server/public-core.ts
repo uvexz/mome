@@ -4,7 +4,12 @@ import { db } from '#/db'
 import { memoReposts, memos, memoTags, user } from '#/db/schema'
 import { resolveAvatarUrl } from '#/lib/avatar'
 import { loadMemoCounts, loadViewerStates } from './interactions-core'
-import { loadMemoTags, resolveTagIds, toMemoWithTags } from './memos-core'
+import {
+  groupMemoTags,
+  loadMemoTags,
+  resolveTagIds,
+  toMemoWithTags,
+} from './memos-core'
 import type { MemoWithTags } from './memos-core'
 import { loadMemoAuthors, resolveGlobalTagIds } from './timeline-core'
 import type { MemoAuthor, TimelineItem } from './timeline-core'
@@ -240,12 +245,7 @@ export async function listPublicFeed(
     loadViewerStates(memoIds, opts.viewerId ?? null),
     loadMemoAuthors(memoIds),
   ])
-  const tagByMemo = new Map<string, typeof tagRows>()
-  for (const t of tagRows) {
-    const list = tagByMemo.get(t.memoId) ?? []
-    list.push(t)
-    tagByMemo.set(t.memoId, list)
-  }
+  const tagByMemo = groupMemoTags(tagRows)
 
   const items: PublicFeedItem[] = page.map((c) => {
     const counts = countsMap.get(c.memoRow.id)
@@ -430,12 +430,7 @@ export async function listAllPublicMemos(
       ),
   ])
   const userById = new Map(userRows.map((u) => [u.id, u]))
-  const tagByMemo = new Map<string, typeof tagRows>()
-  for (const t of tagRows) {
-    const list = tagByMemo.get(t.memoId) ?? []
-    list.push(t)
-    tagByMemo.set(t.memoId, list)
-  }
+  const tagByMemo = groupMemoTags(tagRows)
 
   const items: PublicTimelineItem[] = page.map((m) => {
     const author = userById.get(m.userId)!

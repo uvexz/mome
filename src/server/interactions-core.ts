@@ -1,4 +1,4 @@
-import { and, asc, count, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm'
 import { AppError } from './error-shield'
 
 import { db } from '#/db'
@@ -57,38 +57,73 @@ export const EMPTY_VIEWER_STATE: ViewerState = {
 export async function loadMemoCounts(
   memoIds: string[],
 ): Promise<Map<string, MemoCounts>> {
+  const uniqueMemoIds = [...new Set(memoIds)]
   const map = new Map<string, MemoCounts>(
-    memoIds.map((memoId) => [memoId, { ...EMPTY_COUNTS }]),
+    uniqueMemoIds.map((memoId) => [memoId, { ...EMPTY_COUNTS }]),
   )
-  if (memoIds.length === 0) return map
-  const [likeRows, favoriteRows, commentRows, repostRows] = await Promise.all([
-    db
-      .select({ memoId: memoLikes.memoId, value: count() })
-      .from(memoLikes)
-      .where(inArray(memoLikes.memoId, memoIds))
-      .groupBy(memoLikes.memoId),
-    db
-      .select({ memoId: memoFavorites.memoId, value: count() })
-      .from(memoFavorites)
-      .where(inArray(memoFavorites.memoId, memoIds))
-      .groupBy(memoFavorites.memoId),
-    db
-      .select({ memoId: memoComments.memoId, value: count() })
-      .from(memoComments)
-      .where(inArray(memoComments.memoId, memoIds))
-      .groupBy(memoComments.memoId),
-    db
-      .select({ memoId: memoReposts.memoId, value: count() })
-      .from(memoReposts)
-      .where(inArray(memoReposts.memoId, memoIds))
-      .groupBy(memoReposts.memoId),
-  ])
-  for (const row of likeRows) map.get(row.memoId)!.likes = Number(row.value)
-  for (const row of favoriteRows)
-    map.get(row.memoId)!.favorites = Number(row.value)
-  for (const row of commentRows)
-    map.get(row.memoId)!.comments = Number(row.value)
-  for (const row of repostRows) map.get(row.memoId)!.reposts = Number(row.value)
+  if (uniqueMemoIds.length === 0) return map
+
+  // Aggregate each interaction table once, then join the four small result
+  // sets. This preserves index-friendly memo_id filters while reducing four
+  // remote requests to one and avoiding a four-way row multiplication.
+  const ids = sql.join(
+    uniqueMemoIds.map((id) => sql`${id}`),
+    sql`, `,
+  )
+  const rows = await db.all<{
+    memo_id: string
+    likes: number
+    favorites: number
+    comments: number
+    reposts: number
+  }>(sql`
+    WITH
+      like_counts AS (
+        SELECT memo_id, count(*) AS value
+        FROM ${memoLikes}
+        WHERE memo_id IN (${ids})
+        GROUP BY memo_id
+      ),
+      favorite_counts AS (
+        SELECT memo_id, count(*) AS value
+        FROM ${memoFavorites}
+        WHERE memo_id IN (${ids})
+        GROUP BY memo_id
+      ),
+      comment_counts AS (
+        SELECT memo_id, count(*) AS value
+        FROM ${memoComments}
+        WHERE memo_id IN (${ids})
+        GROUP BY memo_id
+      ),
+      repost_counts AS (
+        SELECT memo_id, count(*) AS value
+        FROM ${memoReposts}
+        WHERE memo_id IN (${ids})
+        GROUP BY memo_id
+      )
+    SELECT
+      m.id AS memo_id,
+      coalesce(l.value, 0) AS likes,
+      coalesce(f.value, 0) AS favorites,
+      coalesce(c.value, 0) AS comments,
+      coalesce(r.value, 0) AS reposts
+    FROM ${memos} AS m
+    LEFT JOIN like_counts AS l ON l.memo_id = m.id
+    LEFT JOIN favorite_counts AS f ON f.memo_id = m.id
+    LEFT JOIN comment_counts AS c ON c.memo_id = m.id
+    LEFT JOIN repost_counts AS r ON r.memo_id = m.id
+    WHERE m.id IN (${ids})
+  `)
+
+  for (const row of rows) {
+    map.set(row.memo_id, {
+      likes: Number(row.likes),
+      favorites: Number(row.favorites),
+      comments: Number(row.comments),
+      reposts: Number(row.reposts),
+    })
+  }
   return map
 }
 

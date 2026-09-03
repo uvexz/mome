@@ -4,7 +4,7 @@ import {
   useNavigate,
   useSearch,
 } from '@tanstack/react-router'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { z } from 'zod'
 import {
   useQueryClient,
@@ -25,6 +25,7 @@ import {
   publicProfileQueryOptions,
   queryKeys,
 } from '#/lib/queries'
+import { useStableCallback } from '#/lib/use-stable-callback'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import type { MemoCounts } from '#/server/interactions-core'
 import type { PublicProfile } from '#/server/public-core'
@@ -59,7 +60,10 @@ function ProfilePage() {
   const memosOptions = publicMemosQueryOptions(username, search.tag)
   const memos = useSuspenseInfiniteQuery(memosOptions)
   if (!profile) throw notFound()
-  const items = memos.data.pages.flatMap((page) => page.items)
+  const items = useMemo(
+    () => memos.data.pages.flatMap((page) => page.items),
+    [memos.data],
+  )
   const [commenting, setCommenting] = useState<MemoWithTags | null>(null)
   const [commentOpen, setCommentOpen] = useState(false)
   const [reposting, setReposting] = useState<MemoWithTags | null>(null)
@@ -154,6 +158,25 @@ function ProfilePage() {
     })
   }
 
+  const onTagClick = useStableCallback(
+    (tag: string) =>
+      void navigate({
+        to: '/@{$username}',
+        params: { username: profile.username },
+        search: { tag },
+      }),
+  )
+  const onLike = useStableCallback(
+    (memo: MemoWithTags) => void handleLike(memo),
+  )
+  const onFavorite = useStableCallback(
+    (memo: MemoWithTags) => void handleFavorite(memo),
+  )
+  const onComment = useStableCallback((memo: MemoWithTags) =>
+    handleComment(memo),
+  )
+  const onRepost = useStableCallback((memo: MemoWithTags) => handleRepost(memo))
+
   return (
     <div className="min-h-dvh">
       <header className="sticky top-0 z-40 border-b border-kumo-line bg-kumo-canvas/85 backdrop-blur">
@@ -194,17 +217,11 @@ function ProfilePage() {
                 author={item.author}
                 repost={item.repost}
                 hideVisibility
-                onTagClick={(tag) =>
-                  void navigate({
-                    to: '/@{$username}',
-                    params: { username: profile.username },
-                    search: { tag },
-                  })
-                }
-                onLike={(m) => void handleLike(m)}
-                onFavorite={(m) => void handleFavorite(m)}
-                onComment={handleComment}
-                onRepost={handleRepost}
+                onTagClick={onTagClick}
+                onLike={onLike}
+                onFavorite={onFavorite}
+                onComment={onComment}
+                onRepost={onRepost}
               />
             ))}
           </div>

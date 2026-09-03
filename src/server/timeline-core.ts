@@ -30,6 +30,7 @@ import { escapeLike } from '#/lib/search'
 
 import { loadMemoCounts, loadViewerStates } from './interactions-core'
 import {
+  groupMemoTags,
   listMemosForUser,
   loadMemoTags,
   resolveTagIds,
@@ -108,41 +109,40 @@ export async function resolveGlobalTagIds(tagPath: string): Promise<string[]> {
   const segments = tagPathToSegments(tagPath)
   if (segments.length === 0) return []
 
-  let ids = (
-    await db
-      .select({ id: tags.id })
-      .from(tags)
-      .where(and(eq(tags.name, segments[0]), isNull(tags.parentId)))
-  ).map((r) => r.id)
-
-  for (let i = 1; i < segments.length; i++) {
-    if (ids.length === 0) return []
-    ids = (
-      await db
-        .select({ id: tags.id })
-        .from(tags)
-        .where(and(inArray(tags.parentId, ids), eq(tags.name, segments[i])))
-    ).map((r) => r.id)
+  const nextSegmentConditions: SQL[] = [sql`0`]
+  for (let depth = 1; depth < segments.length; depth++) {
+    nextSegmentConditions.push(
+      sql`(tag_path.depth = ${depth} AND ${tags.name} = ${segments[depth]})`,
+    )
   }
-  if (ids.length === 0) return []
 
-  // 收集全部后代
-  const result = new Set(ids)
-  const queue = [...ids]
-  while (queue.length > 0) {
-    const children = await db
-      .select({ id: tags.id })
-      .from(tags)
-      .where(inArray(tags.parentId, queue))
-    queue.length = 0
-    for (const child of children) {
-      if (!result.has(child.id)) {
-        result.add(child.id)
-        queue.push(child.id)
-      }
-    }
-  }
-  return [...result]
+  // Resolve the path and every descendant in one recursive query. The old
+  // breadth-first implementation made one remote round trip per tree level.
+  // Keeping traversal in SQLite also means application memory only holds the
+  // matching IDs rather than the site's entire tag graph.
+  const rows = await db.all<{ tag_id: string }>(sql`
+    WITH RECURSIVE
+      tag_path(id, depth) AS (
+        SELECT ${tags.id}, 1
+        FROM ${tags}
+        WHERE ${tags.parentId} IS NULL
+          AND ${tags.name} = ${segments[0]}
+        UNION ALL
+        SELECT ${tags.id}, tag_path.depth + 1
+        FROM ${tags}
+        INNER JOIN tag_path ON ${tags.parentId} = tag_path.id
+        WHERE ${sql.join(nextSegmentConditions, sql` OR `)}
+      ),
+      descendants(id) AS (
+        SELECT id FROM tag_path WHERE depth = ${segments.length}
+        UNION
+        SELECT ${tags.id}
+        FROM ${tags}
+        INNER JOIN descendants ON ${tags.parentId} = descendants.id
+      )
+    SELECT id AS tag_id FROM descendants
+  `)
+  return rows.map((row) => row.tag_id)
 }
 
 // ── 个人时间线（自己的 memo + 转发的他人 memo） ─────────
@@ -228,11 +228,12 @@ export async function listHomeFeedForUser(
       loadMemoCounts(pinnedIds),
       loadViewerStates(pinnedIds, viewerId),
     ])
+    const tagByMemo = groupMemoTags(tagData)
     const toTimelineItem = (memo: typeof memos.$inferSelect): TimelineItem => ({
       kind: 'memo' as const,
       memo: toMemoWithTags(
         memo,
-        tagData.filter((tag) => tag.memoId === memo.id),
+        tagByMemo.get(memo.id) ?? [],
         countsMap.get(memo.id),
         viewerMap.get(memo.id),
       ),
@@ -477,12 +478,7 @@ async function fetchMergedTimeline(
       },
     }),
   ])
-  const tagByMemo = new Map<string, typeof tagRows>()
-  for (const t of tagRows) {
-    const list = tagByMemo.get(t.memoId) ?? []
-    list.push(t)
-    tagByMemo.set(t.memoId, list)
-  }
+  const tagByMemo = groupMemoTags(tagRows)
   const reposter: MemoAuthor = me
     ? {
         id: me.id,
@@ -690,12 +686,7 @@ export async function listInteractionsForUser(
     loadViewerStates(memoIds, userId),
     loadMemoAuthors(memoIds),
   ])
-  const tagByMemo = new Map<string, typeof tagRows>()
-  for (const t of tagRows) {
-    const list = tagByMemo.get(t.memoId) ?? []
-    list.push(t)
-    tagByMemo.set(t.memoId, list)
-  }
+  const tagByMemo = groupMemoTags(tagRows)
 
   const items: InteractionItem[] = page.map((r) => ({
     kind,

@@ -4,7 +4,7 @@ import {
   useNavigate,
   useSearch,
 } from '@tanstack/react-router'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   keepPreviousData,
   useInfiniteQuery,
@@ -33,6 +33,7 @@ import {
   tagsQueryOptions,
 } from '#/lib/queries'
 import { homeSearchSchema } from '#/lib/search'
+import { useStableCallback } from '#/lib/use-stable-callback'
 import { toggleFavorite, toggleLike } from '#/server/interactions'
 import {
   deleteMemo,
@@ -56,18 +57,6 @@ export const Route = createFileRoute('/')({
   },
   component: Home,
 })
-
-/**
- * 返回引用稳定的回调（内部始终调用最新实现）。
- * 列表页每帧都会重建内联 handler，直接传给 memo(MemoCard) 会令 memo 失效。
- */
-function useStableCallback<TArgs extends unknown[], TReturn>(
-  fn: (...args: TArgs) => TReturn,
-): (...args: TArgs) => TReturn {
-  const ref = useRef(fn)
-  ref.current = fn
-  return useCallback((...args: TArgs) => ref.current(...args), [])
-}
 
 function Home() {
   const search = useSearch({ from: '/' })
