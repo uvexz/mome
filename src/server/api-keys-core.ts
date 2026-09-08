@@ -6,6 +6,7 @@ import { apiKeys, user } from '#/db/schema'
 import {
   apiKeyPrefix,
   generateApiKeyToken,
+  generateMemosPatToken,
   hashApiKeyToken,
 } from '#/lib/api-keys'
 import { ulid } from '#/lib/ulid'
@@ -46,7 +47,7 @@ function toApiKeyItem(key: typeof apiKeys.$inferSelect): ApiKeyItem {
 export async function createApiKeyForUser(
   userId: string,
   name: string,
-  opts: { expiresAt?: Date | null } = {},
+  opts: { expiresAt?: Date | null; kind?: 'apiKey' | 'memosPat' } = {},
 ): Promise<{ key: ApiKeyItem; token: string }> {
   const [{ total }] = await db
     .select({ total: count() })
@@ -57,7 +58,8 @@ export async function createApiKeyForUser(
       `最多创建 ${MAX_API_KEYS_PER_USER} 个 API key，请先撤销不再使用的 key`,
     )
   }
-  const token = generateApiKeyToken()
+  const token =
+    opts.kind === 'memosPat' ? generateMemosPatToken() : generateApiKeyToken()
   const key = {
     id: ulid(),
     userId,
@@ -82,6 +84,31 @@ export async function listApiKeysForUser(
     .where(and(eq(apiKeys.userId, userId), isNull(apiKeys.revokedAt)))
     .orderBy(desc(apiKeys.createdAt))
   return rows.map(toApiKeyItem)
+}
+
+/**
+ * 用当前账户的一把 API key 换取 Memos 兼容的 `memos_pat_`。
+ * 要求粘贴的 key 确实属于该账户，避免拿到别人的 key 也能兑换。
+ */
+export async function exchangeApiKeyForMemosPatForUser(
+  userId: string,
+  apiKey: string,
+  opts: { description?: string; expiresAt?: Date | null } = {},
+): Promise<{ key: ApiKeyItem; token: string }> {
+  const owner = await authenticateApiKeyToken(apiKey)
+  if (!owner) {
+    throw new AppError('API key 无效、已过期或已撤销')
+  }
+  if (owner.id !== userId) {
+    throw new AppError('该 API key 不属于当前账户')
+  }
+  if (opts.expiresAt && opts.expiresAt.getTime() <= Date.now()) {
+    throw new AppError('过期时间必须晚于当前时间')
+  }
+  return createApiKeyForUser(userId, opts.description || 'Memos 客户端', {
+    expiresAt: opts.expiresAt ?? null,
+    kind: 'memosPat',
+  })
 }
 
 export async function revokeApiKeyForUser(

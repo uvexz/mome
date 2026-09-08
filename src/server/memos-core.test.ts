@@ -1,13 +1,13 @@
-import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
+import { beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import { createClient } from '@libsql/client'
 import { eq, sql } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/libsql'
 import { migrate } from 'drizzle-orm/libsql/migrator'
-import { unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
-const dbPath = `/private/tmp/mome-core-${process.pid}.db`
-process.env.DATABASE_URL = `file:${dbPath}`
+import { useTestDatabase } from './test-db'
+
+useTestDatabase()
 
 async function loadCore() {
   return import('./memos-core')
@@ -94,14 +94,6 @@ beforeAll(async () => {
       updatedAt: now,
     },
   ])
-})
-
-afterAll(async () => {
-  await Promise.all(
-    ['', '-shm', '-wal'].map((suffix) =>
-      unlink(`${dbPath}${suffix}`).catch(() => undefined),
-    ),
-  )
 })
 
 describe('memo core', () => {

@@ -37,6 +37,8 @@ bun run db:studio       # Drizzle Studio
 - server function 返回值必须可序列化；不允许闭包捕获客户端变量
 - 纯逻辑（如 `#标签` 解析 `src/lib/hashtags.ts`）保持无依赖
 - 数据模型：better-auth 四表 + `memos` / `tags` / `memo_tags`；标签由 content 解析并在同一事务同步
+- Memos 兼容层：`/api/v1/*` 由单条 splat 路由 `src/routes/api/v1/$.ts` 进入 `src/server/memos-compat/`（auth / cel / dto / service / handlers）。新增端点改 `handlers.ts` 的路由表，不要为上游路径新建文件路由（`users:batchGet` 这类冒号段会与参数段冲突）；未实现端点返回 `UNIMPLEMENTED(12)`，不做伪成功。契约见 `docs/memos-compatibility.md`
+- 测试：依赖 `#/db` 的测试文件在同一进程共享单例，必须 `useTestDatabase()`（`src/server/test-db.ts`）共用临时库并在进程退出时清理；文件内的数据要在 `afterAll` 自行删除，避免污染其他测试文件
 
 ## 设计规范（Vercel/Geist × Kumo，写 UI 代码前必读）
 

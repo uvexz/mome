@@ -31,3 +31,8 @@ bun run db:migrate
 # 3. 启动开发服务器（:3000）
 bun dev
 ```
+
+## Memos 兼容 API
+
+Mome 在 `/api/v1/*` 提供 [usememos/memos](https://www.usememos.com) v1 的 **REST JSON**
+兼容面。完整的字段映射、CEL 子集与未实现清单见 [docs/memos-compatibility.md](./docs/memos-compatibility.md)。

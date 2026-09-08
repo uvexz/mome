@@ -51,7 +51,11 @@ import {
   queryKeys,
 } from '#/lib/queries'
 import { uploadPresignedPost } from '#/lib/upload'
-import { createApiKey, revokeApiKey } from '#/server/api-keys'
+import {
+  createApiKey,
+  exchangeApiKeyForMemosPat,
+  revokeApiKey,
+} from '#/server/api-keys'
 import type { ApiKeyItem } from '#/server/api-keys'
 import type { AppConfig } from '#/server/config'
 import {
@@ -150,6 +154,12 @@ function SettingsPage() {
         onApiKeysChange={(keys) =>
           queryClient.setQueryData(apiKeysQueryOptions().queryKey, keys)
         }
+        onApiKeyCreated={(key) =>
+          queryClient.setQueryData(
+            apiKeysQueryOptions().queryKey,
+            (prev: ApiKeyItem[] | undefined) => [key, ...(prev ?? [])],
+          )
+        }
         refresh={refresh}
       />
     </SettingsDashboard>
@@ -166,7 +176,11 @@ function SettingsDashboard({ children }: { children: React.ReactNode }) {
   if (!mounted) return <SettingsLoading />
 
   return (
-    <Sidebar.Provider collapsible="icon" defaultOpen className="h-dvh">
+    <Sidebar.Provider
+      collapsible="icon"
+      defaultOpen
+      className="h-dvh overflow-hidden"
+    >
       {children}
     </Sidebar.Provider>
   )
@@ -187,6 +201,7 @@ function SettingsShell({
   config,
   apiKeys,
   onApiKeysChange,
+  onApiKeyCreated,
   refresh,
 }: {
   activeTab: SettingsTab
@@ -195,6 +210,7 @@ function SettingsShell({
   config: AppConfig
   apiKeys: ApiKeyItem[]
   onApiKeysChange: (keys: ApiKeyItem[]) => void
+  onApiKeyCreated: (key: ApiKeyItem) => void
   refresh: () => Promise<void>
 }) {
   const navigate = useNavigate()
@@ -301,7 +317,10 @@ function SettingsShell({
                 initialKeys={apiKeys}
                 onChanged={onApiKeysChange}
               />
+              <MemosPatExchangeSection onCreated={onApiKeyCreated} />
               <ApiDocsSection />
+              {/* 兼容 API 说明放在最底部，避免长表格把常用区块推下去 */}
+              <MemosCompatSection />
             </div>
           )}
         </main>
@@ -1145,6 +1164,11 @@ function ApiKeysSection({
   const [revoking, setRevoking] = useState<ApiKeyItem | null>(null)
   const [revokeOpen, setRevokeOpen] = useState(false)
 
+  // 其他入口（如 memos_pat_ 兑换）新增 key 后同步列表
+  useEffect(() => {
+    setKeys(initialKeys)
+  }, [initialKeys])
+
   function updateKeys(next: ApiKeyItem[]) {
     setKeys(next)
     onChanged(next)
@@ -1191,7 +1215,7 @@ function ApiKeysSection({
   return (
     <Section
       title="API keys"
-      description="创建 API key 后，可通过 /v1 接口发布与读取 memo。密钥只显示一次，请妥善保存。"
+      description="创建 API key 后，可通过 /v1 接口发布与读取 memo，也可作为 Bearer token 调用 /api/v1（Memos 兼容接口）。密钥只显示一次，请妥善保存。"
     >
       <div className="grid gap-5">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)_auto] sm:items-end">
@@ -1383,6 +1407,254 @@ function CodeBlock({ code }: { code: string }) {
   )
 }
 
+function EndpointTable({
+  rows,
+}: {
+  rows: Array<[method: string, path: string, desc: string]>
+}) {
+  return (
+    <div className="mt-2 overflow-x-auto">
+      <table className="w-full min-w-[480px] border-collapse text-left text-sm">
+        <thead>
+          <tr className="border-b border-kumo-line text-xs text-kumo-subtle">
+            <th className="py-2 pr-4 font-medium">方法</th>
+            <th className="py-2 pr-4 font-medium">路径</th>
+            <th className="py-2 font-medium">说明</th>
+          </tr>
+        </thead>
+        <tbody className="font-mono text-sm">
+          {rows.map(([method, path, desc]) => (
+            <tr
+              key={`${method}-${path}`}
+              className="border-b border-kumo-line/60"
+            >
+              <td className="py-2 pr-4">
+                <span
+                  className={
+                    method === 'GET' ? 'text-kumo-subtle' : 'text-kumo-default'
+                  }
+                >
+                  {method}
+                </span>
+              </td>
+              <td className="py-2 pr-4">{path}</td>
+              <td className="py-2 font-sans text-kumo-subtle">{desc}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Memos 兼容 API ──────────────────────────────────────
+function MemosCompatSection() {
+  return (
+    <Section
+      title="Memos 兼容 API"
+      description="让 MoeMemos 等第三方 Memos 客户端直接连上 Mome，接口对齐 usememos/memos v0.30.0。"
+    >
+      <div className="grid gap-6">
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-kumo-default">认证</h3>
+          <Text variant="secondary" size="sm" DANGEROUS_className="mt-1">
+            用本页创建的 API key，或上方「memos_pat_ 兑换」生成的 memos_pat_ key
+            作为 Bearer token 调用即可；也支持用户名密码换 15 分钟 access
+            token。
+          </Text>
+          <div className="mt-2 grid gap-2">
+            <CodeBlock
+              code={`Authorization: Bearer memos_pat_xxxxxxxxxxxxxxxx`}
+            />
+            <CodeBlock
+              code={`POST /api/v1/auth/signin
+{ "passwordCredentials": { "username": "…", "password": "…" } }`}
+            />
+          </div>
+        </div>
+
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-kumo-default">端点</h3>
+          <EndpointTable
+            rows={[
+              ['GET', '/api/v1/auth/me', '当前用户'],
+              ['POST', '/api/v1/auth/signin', '用户名密码换 access token'],
+              ['GET', '/api/v1/memos', '列表（分页 / filter / orderBy）'],
+              ['POST', '/api/v1/memos', '发布 memo'],
+              ['GET', '/api/v1/memos/:memo', '单条 memo'],
+              ['PATCH', '/api/v1/memos/:memo', '更新（updateMask）'],
+              ['DELETE', '/api/v1/memos/:memo', '删除'],
+              ['GET', '/api/v1/memos/:memo/comments', '评论列表'],
+              ['POST', '/api/v1/memos/:memo/comments', '发表评论'],
+              ['GET', '/api/v1/memos/:memo/reactions', '👍 反应（对应点赞）'],
+              ['GET', '/api/v1/users/:user', '用户信息'],
+              ['GET', '/api/v1/users/:user:getStats', '用户统计'],
+              ['GET', '/api/v1/instance/profile', '实例信息（免登录）'],
+            ]}
+          />
+        </div>
+
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-kumo-default">
+            过滤与排序
+          </h3>
+          <Text variant="secondary" size="sm" DANGEROUS_className="mt-1">
+            只解释官方客户端实际发送的 CEL 子集，未支持的表达式返回
+            400，不会静默忽略条件。
+          </Text>
+          <div className="mt-2">
+            <CodeBlock
+              code={`filter=content.contains("周报") && visibility in ["PUBLIC"]
+filter=tag in ["工作/项目"] || tags.exists(t, t == "想法")
+orderBy=pinned desc, create_time desc`}
+            />
+          </div>
+        </div>
+
+        <Text variant="secondary" size="sm">
+          附件、分享、webhook、通知等端点返回 UNIMPLEMENTED(12)；官方 Memos Web
+          走 Connect binary protobuf，不在兼容范围内。完整边界见仓库
+          docs/memos-compatibility.md。
+        </Text>
+      </div>
+    </Section>
+  )
+}
+
+function MemosPatExchangeSection({
+  onCreated,
+}: {
+  onCreated: (key: ApiKeyItem) => void
+}) {
+  const toast = useKumoToastManager()
+  const [apiKey, setApiKey] = useState('')
+  const [expiry, setExpiry] = useState<ExpiryValue>('never')
+  const [exchanging, setExchanging] = useState(false)
+  const [created, setCreated] = useState<string | null>(null)
+  const [createdOpen, setCreatedOpen] = useState(false)
+
+  async function handleExchange() {
+    if (!apiKey.trim()) {
+      toast.add({ title: '请先粘贴 mome_ API key', variant: 'error' })
+      return
+    }
+    setExchanging(true)
+    try {
+      const res = await exchangeApiKeyForMemosPat({
+        data: { apiKey: apiKey.trim(), expiresAt: expiryDate(expiry) },
+      })
+      setCreated(res.token)
+      setCreatedOpen(true)
+      setApiKey('')
+      onCreated(res.key)
+    } catch (err) {
+      toast.add({
+        title: '兑换失败',
+        description: err instanceof Error ? err.message : '请稍后重试',
+        variant: 'error',
+      })
+    } finally {
+      setExchanging(false)
+    }
+  }
+
+  return (
+    <Section
+      title="memos_pat_ 兑换"
+      description="粘贴一把自己的 mome_ API key，换一把可直接填入 Memos 客户端的 memos_pat_ key。"
+    >
+      <div className="grid gap-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,8rem)_auto] sm:items-end">
+          <div className="min-w-0">
+            <Field label="mome_ API key">
+              <SensitiveInput
+                aria-label="mome_ API key"
+                autoComplete="off"
+                placeholder="mome_…"
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                className="h-8 text-sm"
+              />
+            </Field>
+          </div>
+          <div className="min-w-0">
+            <Field label="有效期">
+              <Select
+                size="sm"
+                className="h-8"
+                value={expiry}
+                onValueChange={(value) => setExpiry(value ?? 'never')}
+              >
+                {Object.entries(EXPIRY_OPTIONS).map(([value, label]) => (
+                  <Select.Option key={value} value={value}>
+                    {label}
+                  </Select.Option>
+                ))}
+              </Select>
+            </Field>
+          </div>
+          <Button
+            variant="primary"
+            size="sm"
+            icon={<Key size={14} />}
+            loading={exchanging}
+            onClick={() => void handleExchange()}
+            className="h-8 w-full sm:w-auto"
+          >
+            兑换 memos_pat_
+          </Button>
+        </div>
+
+        <Text variant="secondary" size="sm">
+          只接受当前账户自己的 key；兑换出的 PAT 与上面的 API key
+          共用同一份额度（最多 20 把未撤销凭据），可在上方列表里撤销。
+        </Text>
+      </div>
+
+      <Dialog.Root open={createdOpen} onOpenChange={setCreatedOpen}>
+        <Dialog className="p-6">
+          <div className="mb-4 flex items-start justify-between gap-4">
+            <Dialog.Title className="text-base font-semibold">
+              memos_pat_ key 已生成
+            </Dialog.Title>
+            <Dialog.Close
+              aria-label="关闭"
+              render={(props) => (
+                <Button
+                  {...props}
+                  variant="ghost"
+                  shape="square"
+                  size="xs"
+                  icon={<X size={16} />}
+                  aria-label="关闭"
+                />
+              )}
+            />
+          </div>
+          <Dialog.Description className="text-sm text-kumo-subtle">
+            密钥只显示这一次，关闭后无法再次查看。请把它填到 Memos 客户端的
+            access token / PAT 字段。
+          </Dialog.Description>
+          {created && (
+            <div className="mt-4">
+              <ClipboardText text={created} size="sm" className="w-full" />
+            </div>
+          )}
+          <div className="mt-6 flex justify-end gap-2">
+            <Dialog.Close
+              render={(props) => (
+                <Button variant="primary" {...props}>
+                  我已保存
+                </Button>
+              )}
+            />
+          </div>
+        </Dialog>
+      </Dialog.Root>
+    </Section>
+  )
+}
+
 function ApiDocsSection() {
   return (
     <Section
@@ -1404,51 +1676,19 @@ function ApiDocsSection() {
           <h3 className="text-sm font-semibold text-kumo-default">
             Memos 接口
           </h3>
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-[480px] border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-kumo-line text-xs text-kumo-subtle">
-                  <th className="py-2 pr-4 font-medium">方法</th>
-                  <th className="py-2 pr-4 font-medium">路径</th>
-                  <th className="py-2 font-medium">说明</th>
-                </tr>
-              </thead>
-              <tbody className="font-mono text-sm">
-                {[
-                  ['GET', '/v1/me', '当前用户信息'],
-                  ['GET', '/v1/memos', '分页列出 memo'],
-                  ['POST', '/v1/memos', '发布 memo'],
-                  ['POST', '/v1/clips', '保存网页剪藏'],
-                  ['GET', '/v1/memos/:id', '获取单条 memo'],
-                  ['PATCH', '/v1/memos/:id', '更新 memo'],
-                  ['DELETE', '/v1/memos/:id', '删除 memo'],
-                  ['GET', '/v1/tags', '标签列表'],
-                  ['GET', '/v1/stats', '统计信息'],
-                ].map(([method, path, desc]) => (
-                  <tr
-                    key={`${method}-${path}`}
-                    className="border-b border-kumo-line/60"
-                  >
-                    <td className="py-2 pr-4">
-                      <span
-                        className={
-                          method === 'GET'
-                            ? 'text-kumo-subtle'
-                            : method === 'POST'
-                              ? 'text-kumo-default'
-                              : 'text-kumo-default'
-                        }
-                      >
-                        {method}
-                      </span>
-                    </td>
-                    <td className="py-2 pr-4">{path}</td>
-                    <td className="py-2 font-sans text-kumo-subtle">{desc}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <EndpointTable
+            rows={[
+              ['GET', '/v1/me', '当前用户信息'],
+              ['GET', '/v1/memos', '分页列出 memo'],
+              ['POST', '/v1/memos', '发布 memo'],
+              ['POST', '/v1/clips', '保存网页剪藏'],
+              ['GET', '/v1/memos/:id', '获取单条 memo'],
+              ['PATCH', '/v1/memos/:id', '更新 memo'],
+              ['DELETE', '/v1/memos/:id', '删除 memo'],
+              ['GET', '/v1/tags', '标签列表'],
+              ['GET', '/v1/stats', '统计信息'],
+            ]}
+          />
         </div>
 
         <div className="min-w-0">

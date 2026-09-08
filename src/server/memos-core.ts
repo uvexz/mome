@@ -335,11 +335,18 @@ export async function loadMemoTags(memoIds: string[]): Promise<MemoTagRow[]> {
 export async function createMemoForUser(
   userId: string,
   content: string,
-  opts: { visibility?: 'public' | 'private'; clientId?: string } = {},
+  opts: {
+    visibility?: 'public' | 'private'
+    clientId?: string
+    /** 指定 memo id（Memos 兼容层 memoId 参数）；缺省用 ULID */
+    id?: string
+    /** 指定创建时间（Memos 兼容层 createTime）；缺省为当前时间 */
+    createdAt?: Date
+  } = {},
 ): Promise<MemoWithTags> {
-  const now = new Date()
+  const now = opts.createdAt ?? new Date()
   const memo = {
-    id: ulid(),
+    id: opts.id ?? ulid(),
     userId,
     content,
     clientId: opts.clientId ?? null,
