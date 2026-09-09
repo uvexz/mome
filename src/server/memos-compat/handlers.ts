@@ -783,7 +783,7 @@ const instanceProfile: Handler = async () => {
   ).at(0)
   const anyUser = await db.select({ id: user.id }).from(user).limit(1)
   const json: Record<string, unknown> = {
-    version: 'mome',
+    version: '0.30.0',
     demo: false,
     instanceUrl: process.env.BETTER_AUTH_URL ?? '',
     needsSetup: anyUser.length === 0,
