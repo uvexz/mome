@@ -241,6 +241,28 @@ export const apiKeys = sqliteTable(
   ],
 )
 
+// ── memos 兼容层 refresh token ────────────────────────────
+// 兼容 API 的 refresh 是自签 JWT，必须有服务端状态才能撤销：这里按 jti 记录
+// 单次消费与撤销状态，退出/改密/撤销会话都能立即让旧凭据失效。
+export const compatRefreshTokens = sqliteTable(
+  'compat_refresh_tokens',
+  {
+    // JWT 的 jti
+    id: text('id').primaryKey(),
+    userId: text('user_id')
+      .notNull()
+      .references(() => user.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+    expiresAt: integer('expires_at', { mode: 'timestamp_ms' }).notNull(),
+    // 轮换消费或主动撤销后写入；两者都让该 token 不可再用
+    revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+  },
+  (t) => [
+    index('compat_refresh_user_idx').on(t.userId),
+    index('compat_refresh_expires_idx').on(t.expiresAt),
+  ],
+)
+
 // ── tags（支持二级：#标签 / #标签/子标签） ────────────────
 // parentId 为空串表示根标签；唯一键按 (userId, name, coalesce(parentId,'')) 判重
 export const tags = sqliteTable(

@@ -79,11 +79,23 @@ function ExplorePage() {
     return false
   }
 
-  function patchItem(id: string, patch: Partial<MemoWithTags>) {
+  // patch 支持函数式：互动响应只带自己那个字段，必须基于最新缓存合并，
+  // 否则后到的收藏响应会用 await 之前的快照覆盖刚更新的点赞状态
+  function patchItem(
+    id: string,
+    patch:
+      Partial<MemoWithTags> | ((memo: MemoWithTags) => Partial<MemoWithTags>),
+  ) {
     queryClient.setQueryData(timelineOptions.queryKey, (data) =>
       mapInfiniteItems(data, (item) =>
         item.memo.id === id
-          ? { ...item, memo: { ...item.memo, ...patch } }
+          ? {
+              ...item,
+              memo: {
+                ...item.memo,
+                ...(typeof patch === 'function' ? patch(item.memo) : patch),
+              },
+            }
           : item,
       ),
     )
@@ -120,10 +132,10 @@ function ExplorePage() {
     if (!requireLogin()) return
     try {
       const res = await toggleLike({ data: { memoId: memo.id } })
-      patchItem(memo.id, {
+      patchItem(memo.id, (current) => ({
         counts: res.counts,
-        viewerState: { ...memo.viewerState, liked: res.liked },
-      })
+        viewerState: { ...current.viewerState, liked: res.liked },
+      }))
       markRelatedQueriesStale()
     } catch (err) {
       toast.add({
@@ -138,10 +150,10 @@ function ExplorePage() {
     if (!requireLogin()) return
     try {
       const res = await toggleFavorite({ data: { memoId: memo.id } })
-      patchItem(memo.id, {
+      patchItem(memo.id, (current) => ({
         counts: res.counts,
-        viewerState: { ...memo.viewerState, favorited: res.favorited },
-      })
+        viewerState: { ...current.viewerState, favorited: res.favorited },
+      }))
       markRelatedQueriesStale()
     } catch (err) {
       toast.add({

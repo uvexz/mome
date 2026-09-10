@@ -886,10 +886,12 @@ function resizeImage(file: File): Promise<string> {
         canvas.height = size
         const ctx = canvas.getContext('2d')
         if (!ctx) throw new Error('canvas unsupported')
-        const scale = Math.max(size / img.width, size / img.height)
-        const w = size / scale
-        const h = size / scale
-        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h)
+        // 按短边裁出居中正方形再铺满画布：原写法把 size / scale 同时当作
+        // 目标宽高，等于 min(宽, 高)，会留边或把非正方形图压变形
+        const side = Math.min(img.width, img.height)
+        const sx = (img.width - side) / 2
+        const sy = (img.height - side) / 2
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size)
         URL.revokeObjectURL(url)
         resolve(canvas.toDataURL('image/png'))
       } catch (err) {

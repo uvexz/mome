@@ -14,7 +14,6 @@ import { MemoCard } from '#/components/memo-card'
 import { MemoCommentsDialog } from '#/components/memo-comments-dialog'
 import { RepostDialog } from '#/components/repost-dialog'
 import { HashtagText } from '#/components/hashtag-text'
-import { relativeTime } from '#/lib/date'
 import { cn } from '#/lib/utils'
 import {
   interactionsQueryOptions,
@@ -27,6 +26,7 @@ import type { MemoCounts } from '#/server/interactions-core'
 import type { MemoWithTags } from '#/server/memos'
 import { getSessionUser } from '#/server/session'
 import type { InteractionKind } from '#/server/timeline-core'
+import { RelativeTime } from '#/components/relative-time'
 
 const TABS: Array<{
   key: InteractionKind
@@ -263,7 +263,7 @@ function InteractionsPage() {
                       dateTime={item.interactedAt}
                       className="font-mono text-[0.9em]"
                     >
-                      {relativeTime(item.interactedAt)}
+                      {<RelativeTime iso={item.interactedAt} />}
                     </time>
                   </div>
                   {item.content && (

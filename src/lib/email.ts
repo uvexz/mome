@@ -120,7 +120,10 @@ export async function sendOtpEmail({
       }),
     })
     if (!res.ok) {
+      // 供应商失败必须向上传播：吞掉会让调用方显示"验证码已发送"，
+      // 用户干等一封永远不会到的邮件。日志保留诊断信息，抛出的错误不含供应商正文。
       console.error('[mome OTP] Resend 发送失败', res.status, await res.text())
+      throw new Error('邮件发送失败，请稍后重试')
     }
     return
   }

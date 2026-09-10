@@ -1,12 +1,22 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Text } from '@cloudflare/kumo'
+import { z } from 'zod'
 
 import { LoginTabs } from '#/components/login-forms'
 import { appConfigQueryOptions } from '#/lib/queries'
 import { getSessionUser } from '#/server/session'
 
 export const Route = createFileRoute('/login')({
+  // next 只接受站内相对路径（且不是 //host 形式），避免开放重定向
+  validateSearch: z.object({
+    next: z
+      .string()
+      .max(2000)
+      .regex(/^\/(?!\/)/)
+      .optional()
+      .catch(undefined),
+  }),
   loader: ({ context }) =>
     context.queryClient.ensureQueryData(appConfigQueryOptions()),
   beforeLoad: async () => {
@@ -18,6 +28,7 @@ export const Route = createFileRoute('/login')({
 
 function LoginPage() {
   const navigate = useNavigate()
+  const { next } = Route.useSearch()
   const { data: config } = useSuspenseQuery(appConfigQueryOptions())
 
   return (
@@ -35,7 +46,7 @@ function LoginPage() {
           <Text variant="secondary">记下此刻的想法。</Text>
         </div>
 
-        <LoginTabs onDone={() => void navigate({ to: '/' })} />
+        <LoginTabs onDone={() => void navigate({ href: next ?? '/' })} />
 
         <p className="mt-8 text-center text-sm text-kumo-subtle">
           还没有账号？{' '}

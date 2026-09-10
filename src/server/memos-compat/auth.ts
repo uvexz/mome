@@ -10,10 +10,10 @@
  * 自身的签名用途混用）。token 与上游不是字节级 parity，仅保证客户端可用。
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { eq } from 'drizzle-orm'
+import { and, eq, gt, isNull, lt } from 'drizzle-orm'
 
 import { db } from '#/db'
-import { user } from '#/db/schema'
+import { compatRefreshTokens, user } from '#/db/schema'
 import { auth } from '#/lib/auth'
 import { authenticateApiKeyToken } from '../api-keys-core'
 import { isAdminUser } from '../settings-core'
@@ -122,26 +122,78 @@ export function issueAccessToken(
   }
 }
 
-export function issueRefreshToken(userId: string): {
+export async function issueRefreshToken(userId: string): Promise<{
   refreshToken: string
   expiresAt: Date
-} {
+}> {
   const now = Math.floor(Date.now() / 1000)
   const exp = now + REFRESH_TOKEN_TTL_SECONDS
+  const jti = randomUUID()
+  const expiresAt = new Date(exp * 1000)
+  await db.insert(compatRefreshTokens).values({
+    id: jti,
+    userId,
+    createdAt: new Date(now * 1000),
+    expiresAt,
+  })
+  // 顺带清理已过期记录，避免表随签发量无限增长
+  await db
+    .delete(compatRefreshTokens)
+    .where(lt(compatRefreshTokens.expiresAt, new Date()))
   return {
     refreshToken: signJwt({
       iss: ISSUER,
       aud: REFRESH_AUDIENCE,
       sub: userId,
-      jti: randomUUID(),
+      jti,
       iat: now,
       exp,
     }),
-    expiresAt: new Date(exp * 1000),
+    expiresAt,
   }
 }
 
-export function verifyRefreshToken(token: string): string | null {
+/**
+ * 单次消费 refresh token：签名/有效期之外还要求服务端记录存在且未撤销，
+ * 并在同一条件更新里标记已消费，重放与并发刷新只有一个能成功。
+ */
+export async function consumeRefreshToken(
+  token: string,
+): Promise<string | null> {
+  const claims = verifyJwt(token, REFRESH_AUDIENCE)
+  if (!claims?.jti) return null
+  const consumed = await db
+    .update(compatRefreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(compatRefreshTokens.id, claims.jti),
+        eq(compatRefreshTokens.userId, claims.sub),
+        isNull(compatRefreshTokens.revokedAt),
+        gt(compatRefreshTokens.expiresAt, new Date()),
+      ),
+    )
+    .returning({ userId: compatRefreshTokens.userId })
+  return consumed.at(0)?.userId ?? null
+}
+
+/** 退出/改密/撤销会话时调用：让该用户全部兼容 refresh 凭据立即失效 */
+export async function revokeRefreshTokensForUser(
+  userId: string,
+): Promise<void> {
+  await db
+    .update(compatRefreshTokens)
+    .set({ revokedAt: new Date() })
+    .where(
+      and(
+        eq(compatRefreshTokens.userId, userId),
+        isNull(compatRefreshTokens.revokedAt),
+      ),
+    )
+}
+
+/** 只解析 refresh token 的用户，不消费（signout 用） */
+export function refreshTokenSubject(token: string): string | null {
   return verifyJwt(token, REFRESH_AUDIENCE)?.sub ?? null
 }
 

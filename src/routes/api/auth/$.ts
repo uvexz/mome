@@ -1,9 +1,8 @@
 import { createFileRoute } from '@tanstack/react-router'
-import { eq } from 'drizzle-orm'
 
-import { db } from '#/db'
-import { user } from '#/db/schema'
 import { auth } from '#/lib/auth'
+import { isPasswordLoginBlocked } from '#/server/auth-policy'
+import { revokeRefreshTokensForUser } from '#/server/memos-compat/auth'
 import { loadEmailSettings, loadSiteSettings } from '#/server/settings-core'
 
 export const Route = createFileRoute('/api/auth/$')({
@@ -31,31 +30,31 @@ export const Route = createFileRoute('/api/auth/$')({
           return signUpWithoutSession(request)
         }
 
-        // 密码登录前要求已验证邮箱（运行时配置即时生效）
-        if (!emailSettings.enabled || !path.endsWith('/sign-in/email')) {
-          return auth.handler(request)
+        // 密码登录前要求已验证邮箱（运行时配置即时生效）。
+        // email 与 username 两个入口用同一策略，不能只守其中一个。
+        const isPasswordSignIn =
+          path.endsWith('/sign-in/email') || path.endsWith('/sign-in/username')
+        if (!isPasswordSignIn) {
+          return withCompatRevocation(path, request)
         }
 
         const text = await request.text()
         const body = parseBody(text)
-        const email =
-          typeof body.email === 'string' ? body.email.toLowerCase() : ''
-        if (email) {
-          const existing = await db.query.user.findFirst({
-            where: eq(user.email, email),
-            columns: { emailVerified: true },
-          })
-          if (existing && !existing.emailVerified) {
-            // 与 better-auth 对未知邮箱的响应完全一致（401 + 同文案同结构），
-            // 防止通过差异响应枚举"已注册但未验证"的邮箱
-            return Response.json(
-              {
-                message: 'Invalid email or password',
-                code: 'INVALID_EMAIL_OR_PASSWORD',
-              },
-              { status: 401 },
-            )
-          }
+        const blocked = await isPasswordLoginBlocked({
+          email: typeof body.email === 'string' ? body.email : undefined,
+          username:
+            typeof body.username === 'string' ? body.username : undefined,
+        })
+        if (blocked) {
+          // 与 better-auth 对未知邮箱的响应完全一致（401 + 同文案同结构），
+          // 防止通过差异响应枚举"已注册但未验证"的邮箱
+          return Response.json(
+            {
+              message: 'Invalid email or password',
+              code: 'INVALID_EMAIL_OR_PASSWORD',
+            },
+            { status: 401 },
+          )
         }
         return auth.handler(
           new Request(request.url, {
@@ -68,6 +67,32 @@ export const Route = createFileRoute('/api/auth/$')({
     },
   },
 })
+
+/**
+ * 退出与改密必须同时让 Memos 兼容层的 refresh 凭据失效，
+ * 否则删掉浏览器会话后旧 refresh token 仍能继续换取访问令牌。
+ */
+async function withCompatRevocation(
+  path: string,
+  request: Request,
+): Promise<Response> {
+  const revokes =
+    path.endsWith('/sign-out') ||
+    path.endsWith('/change-password') ||
+    path.endsWith('/revoke-sessions') ||
+    path.endsWith('/revoke-other-sessions')
+  const userId = revokes
+    ? await auth.api
+        .getSession({ headers: request.headers })
+        .then((session) => session?.user.id ?? null)
+        .catch(() => null)
+    : null
+  const response = await auth.handler(request)
+  if (userId && response.status < 400) {
+    await revokeRefreshTokensForUser(userId)
+  }
+  return response
+}
 
 function parseBody(text: string): Record<string, unknown> {
   try {

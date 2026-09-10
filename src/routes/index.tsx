@@ -126,7 +126,13 @@ function Home() {
   }
 
   function markOtherMemoViewsStale() {
-    for (const queryKey of [queryKeys.public, queryKeys.interactions]) {
+    // 包含 queryKeys.memos：筛选条件在 URL 上，每种组合是独立缓存条目，
+    // 只 patch 当前条目会让返回其它筛选页时看到删除前的数据
+    for (const queryKey of [
+      queryKeys.memos,
+      queryKeys.public,
+      queryKeys.interactions,
+    ]) {
       void queryClient.invalidateQueries({ queryKey, refetchType: 'none' })
     }
   }
@@ -146,7 +152,7 @@ function Home() {
   function handleCreated(memo: MemoWithTags) {
     refreshMetadata()
     markOtherMemoViewsStale()
-    if (search.tag || search.q || search.filter) {
+    if (hasFilters || search.filter) {
       // 当前视图有筛选/归档时，乐观插入可能不符合视图条件，改为按当前条件重载
       void feed.refetch()
     } else {
@@ -174,7 +180,9 @@ function Home() {
 
   async function handleEdit(memo: MemoWithTags, content: string) {
     try {
-      const updated = await updateMemo({ data: { id: memo.id, content } })
+      const updated = await updateMemo({
+        data: { id: memo.id, content, expectedUpdatedAt: memo.updatedAt },
+      })
       refreshMetadata()
       markOtherMemoViewsStale()
       if (search.tag || search.q) {
@@ -276,11 +284,23 @@ function Home() {
   }
 
   // ── 互动 ───────────────────────────────────────────────
-  function patchMemo(id: string, patch: Partial<MemoWithTags>) {
+  // patch 支持函数式：互动响应只带自己那个字段，必须基于最新缓存合并，
+  // 否则后到的收藏响应会用 await 之前的快照覆盖刚更新的点赞状态
+  function patchMemo(
+    id: string,
+    patch:
+      Partial<MemoWithTags> | ((memo: MemoWithTags) => Partial<MemoWithTags>),
+  ) {
     queryClient.setQueryData(feedOptions.queryKey, (data) =>
       mapInfiniteItems(data, (item) =>
         item.memo.id === id
-          ? { ...item, memo: { ...item.memo, ...patch } }
+          ? {
+              ...item,
+              memo: {
+                ...item.memo,
+                ...(typeof patch === 'function' ? patch(item.memo) : patch),
+              },
+            }
           : item,
       ),
     )
@@ -292,7 +312,11 @@ function Home() {
       const res = await setVisibility({
         data: { id: memo.id, visibility: next },
       })
-      patchMemo(memo.id, { visibility: res.visibility })
+      if (search.visibility && res.visibility !== search.visibility) {
+        removeMemo(memo.id)
+      } else {
+        patchMemo(memo.id, { visibility: res.visibility })
+      }
       markOtherMemoViewsStale()
       toast.add({
         title: res.visibility === 'public' ? '已设为公开' : '已设为私密',
@@ -306,10 +330,10 @@ function Home() {
   async function handleLike(memo: MemoWithTags) {
     try {
       const res = await toggleLike({ data: { memoId: memo.id } })
-      patchMemo(memo.id, {
+      patchMemo(memo.id, (current) => ({
         counts: res.counts,
-        viewerState: { ...memo.viewerState, liked: res.liked },
-      })
+        viewerState: { ...current.viewerState, liked: res.liked },
+      }))
       markOtherMemoViewsStale()
     } catch (err) {
       toast.add({
@@ -323,10 +347,15 @@ function Home() {
   async function handleFavorite(memo: MemoWithTags) {
     try {
       const res = await toggleFavorite({ data: { memoId: memo.id } })
-      patchMemo(memo.id, {
-        counts: res.counts,
-        viewerState: { ...memo.viewerState, favorited: res.favorited },
-      })
+      if (search.favorited && !res.favorited) {
+        // 收藏筛选视图里取消收藏后该条已不符合条件，直接移除而不是只改字段
+        removeMemo(memo.id)
+      } else {
+        patchMemo(memo.id, (current) => ({
+          counts: res.counts,
+          viewerState: { ...current.viewerState, favorited: res.favorited },
+        }))
+      }
       markOtherMemoViewsStale()
     } catch (err) {
       toast.add({
@@ -348,14 +377,14 @@ function Home() {
     reposted: boolean,
     content: string | null,
   ) {
-    patchMemo(memo.id, {
+    patchMemo(memo.id, (current) => ({
       counts,
       viewerState: {
-        ...memo.viewerState,
+        ...current.viewerState,
         reposted,
         repostedContent: content,
       },
-    })
+    }))
     markOtherMemoViewsStale()
   }
 

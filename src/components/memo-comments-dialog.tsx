@@ -14,7 +14,6 @@ import {
 import { PaperPlaneRight, Trash, X } from '@phosphor-icons/react'
 
 import { authClient } from '#/lib/auth-client'
-import { relativeTime } from '#/lib/date'
 import {
   commentsQueryOptions,
   mapInfiniteItems,
@@ -23,6 +22,7 @@ import {
 import { addComment, deleteComment } from '#/server/interactions'
 import type { CommentItem, MemoCounts } from '#/server/interactions-core'
 import type { MemoWithTags } from '#/server/memos'
+import { RelativeTime } from '#/components/relative-time'
 import { Avatar } from './avatar'
 import { HashtagText } from './hashtag-text'
 
@@ -84,15 +84,24 @@ export function MemoCommentsDialog({
         memoId: memo.id,
         content,
       })
-      queryClient.setQueryData(options.queryKey, (data) => {
-        if (!data || data.pages.length === 0) return data
-        const pages = [...data.pages]
-        const index = pages.length - 1
-        const page = pages[index]
-        pages[index] = { ...page, items: [...page.items, result.comment] }
-        return { ...data, pages }
-      })
-      setDraft('')
+      // 评论按时间升序分页：末页仍有 nextCursor 时直接追加，
+      // 后续翻页会再次返回同一条（重复 key、顺序错乱），这时改为失效重取
+      const cached = queryClient.getQueryData(options.queryKey)
+      const lastPage = cached?.pages[cached.pages.length - 1]
+      if (lastPage && !lastPage.nextCursor) {
+        queryClient.setQueryData(options.queryKey, (data) => {
+          if (!data || data.pages.length === 0) return data
+          const pages = [...data.pages]
+          const index = pages.length - 1
+          const page = pages[index]
+          pages[index] = { ...page, items: [...page.items, result.comment] }
+          return { ...data, pages }
+        })
+      } else {
+        void queryClient.invalidateQueries({ queryKey: options.queryKey })
+      }
+      // 只清掉已提交的那份草稿，保留请求期间新输入的内容
+      setDraft((current) => (current.trim() === content ? '' : current))
       onCountsChange(result.counts)
       markRelatedQueriesStale()
       toast.add({ title: '已评论', variant: 'success' })
@@ -185,7 +194,7 @@ export function MemoCommentsDialog({
                         dateTime={comment.createdAt}
                         className="font-mono text-xs text-kumo-inactive"
                       >
-                        {relativeTime(comment.createdAt)}
+                        {<RelativeTime iso={comment.createdAt} />}
                       </time>
                       {viewerId === comment.author.id && (
                         <button

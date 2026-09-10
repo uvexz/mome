@@ -43,12 +43,17 @@ export const createMemo = createServerFn({ method: 'POST' })
       clientId: z.string().uuid().optional(),
     }),
   )
-  .handler(async ({ data, context }) =>
-    createMemoForUser(context.user.id, data.content, {
+  .handler(async ({ data, context }) => {
+    // 与原生 /v1 的写入配额保持一致：Server Function 入口原本没有任何预算
+    await rateLimitOrThrow(`memo-write:${context.user.id}`, {
+      window: 60,
+      max: 60,
+    })
+    return createMemoForUser(context.user.id, data.content, {
       visibility: data.visibility,
       clientId: data.clientId,
-    }),
-  )
+    })
+  })
 
 /** 个人时间线：自己的 memo + 转发的他人公开 memo */
 export const listHomeFeed = createServerFn({ method: 'GET' })
@@ -94,11 +99,21 @@ export const updateMemo = createServerFn({ method: 'POST' })
     z.object({
       id: z.string().min(1),
       content: z.string().trim().min(1).max(MAX_CONTENT),
+      // 编辑所基于的版本；不传时保持旧的"后写覆盖"行为
+      expectedUpdatedAt: z.iso.datetime().optional(),
     }),
   )
-  .handler(async ({ data, context }) =>
-    updateMemoForUser(context.user.id, data.id, data.content),
-  )
+  .handler(async ({ data, context }) => {
+    await rateLimitOrThrow(`memo-write:${context.user.id}`, {
+      window: 60,
+      max: 60,
+    })
+    return updateMemoForUser(context.user.id, data.id, data.content, {
+      expectedUpdatedAt: data.expectedUpdatedAt
+        ? new Date(data.expectedUpdatedAt)
+        : undefined,
+    })
+  })
 
 export const deleteMemo = createServerFn({ method: 'POST' })
   .middleware([authMiddleware])

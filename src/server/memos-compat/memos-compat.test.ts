@@ -171,8 +171,12 @@ describe('memos compat auth', () => {
       'signinuser',
     )
 
+    const refreshHeaders = {
+      cookie: cookie.split(';')[0],
+      origin: 'http://localhost:3000',
+    }
     const refresh = await call('POST', '/api/v1/auth/refresh', {
-      headers: { cookie: cookie.split(';')[0] },
+      headers: refreshHeaders,
     })
     expect(refresh.status).toBe(200)
     const refreshed = refresh.body.accessToken as string
@@ -181,9 +185,26 @@ describe('memos compat auth', () => {
       (await call('GET', '/api/v1/auth/me', { token: refreshed })).status,
     ).toBe(200)
 
-    const signout = await call('POST', '/api/v1/auth/signout')
+    // 旧 refresh token 只能消费一次：轮换后重放必须失败
+    const replay = await call('POST', '/api/v1/auth/refresh', {
+      headers: refreshHeaders,
+    })
+    expect(replay.status).toBe(401)
+
+    // signout 撤销该用户全部兼容 refresh 记录，新 token 同样失效
+    const rotated = (refresh.headers.get('set-cookie') ?? '').split(';')[0]
+    const signout = await call('POST', '/api/v1/auth/signout', {
+      headers: { cookie: rotated, origin: 'http://localhost:3000' },
+    })
     expect(signout.status).toBe(200)
     expect(signout.headers.get('set-cookie')).toContain('Max-Age=0')
+    expect(
+      (
+        await call('POST', '/api/v1/auth/refresh', {
+          headers: { cookie: rotated, origin: 'http://localhost:3000' },
+        })
+      ).status,
+    ).toBe(401)
   })
 
   test('signin with a wrong password returns UNAUTHENTICATED', async () => {
@@ -674,10 +695,73 @@ describe('memos compat users, instance and PAT', () => {
   test('serves the instance profile', async () => {
     const res = await call('GET', '/api/v1/instance/profile')
     expect(res.status).toBe(200)
-    expect(res.body.version).toBe('mome')
+    // 兼容层对客户端声明的是 Memos 的 API 版本号，不是产品名
+    expect(res.body.version).toBe('0.30.0')
     expect(res.body.needsSetup).toBe(false)
     // 同一进程内其他测试文件也会创建管理员，这里只断言资源名形态
     expect((res.body.admin as Record<string, unknown>).name).toMatch(/^users\//)
+  })
+})
+
+describe('memos compat pagination', () => {
+  test('walks every memo exactly once with the opaque pageToken', async () => {
+    const created: string[] = []
+    for (let i = 0; i < 7; i++) {
+      const res = await call('POST', '/api/v1/memos', {
+        token: ownerToken,
+        body: memoBody(`pagination probe ${i}`, { visibility: 'PRIVATE' }),
+      })
+      expect(res.status).toBe(200)
+      created.push((res.body.name as string).slice('memos/'.length))
+    }
+    const seen: string[] = []
+    let token = ''
+    for (let page = 0; page < 20; page++) {
+      const query = token
+        ? `/api/v1/memos?pageSize=2&pageToken=${encodeURIComponent(token)}`
+        : '/api/v1/memos?pageSize=2'
+      const res = await call('GET', query, { token: ownerToken })
+      expect(res.status).toBe(200)
+      for (const memo of res.body.memos as Array<{ name: string }>) {
+        seen.push(memo.name.slice('memos/'.length))
+      }
+      token = res.body.nextPageToken as string
+      if (!token) break
+    }
+    expect(token).toBe('')
+    // 不重不漏
+    expect(new Set(seen).size).toBe(seen.length)
+    for (const id of created) expect(seen).toContain(id)
+  })
+
+  test('accepts legacy offset pageTokens', async () => {
+    const legacy = Buffer.from(JSON.stringify({ o: 1 })).toString('base64url')
+    const res = await call(
+      'GET',
+      `/api/v1/memos?pageSize=2&pageToken=${encodeURIComponent(legacy)}`,
+      { token: ownerToken },
+    )
+    expect(res.status).toBe(200)
+    expect(Array.isArray(res.body.memos)).toBe(true)
+  })
+
+  test('returns a next page token for users when more rows exist', async () => {
+    const res = await call('GET', '/api/v1/users?pageSize=1', {
+      token: ownerToken,
+    })
+    expect(res.status).toBe(200)
+    expect((res.body.users as unknown[]).length).toBe(1)
+    expect(res.body.nextPageToken).not.toBe('')
+
+    const next = await call(
+      'GET',
+      `/api/v1/users?pageSize=1&pageToken=${encodeURIComponent(res.body.nextPageToken as string)}`,
+      { token: ownerToken },
+    )
+    expect(next.status).toBe(200)
+    expect((next.body.users as Array<{ name: string }>)[0].name).not.toBe(
+      (res.body.users as Array<{ name: string }>)[0].name,
+    )
   })
 })
 
@@ -725,6 +809,65 @@ describe('memos compat access control', () => {
       body: { content: 'hijack' },
     })
     expect(res.status).toBe(404)
+  })
+
+  test('never exposes unreadable relation targets', async () => {
+    const marker = 'RELATION_ACL_PRIVATE_MARKER'
+    const secret = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody(`${marker} private target`, { visibility: 'PRIVATE' }),
+    })
+    const archived = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody('ARCHIVED_TARGET_MARKER', { visibility: 'PUBLIC' }),
+    })
+    const source = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody('public source', { visibility: 'PUBLIC' }),
+    })
+    const secretId = (secret.body.name as string).slice('memos/'.length)
+    const archivedId = (archived.body.name as string).slice('memos/'.length)
+    const sourceId = (source.body.name as string).slice('memos/'.length)
+    expect(
+      (
+        await call('PATCH', `/api/v1/memos/${archivedId}`, {
+          token: ownerToken,
+          body: { state: 'ARCHIVED' },
+        })
+      ).status,
+    ).toBe(200)
+    const linked = await call('PATCH', `/api/v1/memos/${sourceId}/relations`, {
+      token: ownerToken,
+      body: {
+        relations: [
+          { relatedMemo: { name: `memos/${secretId}` } },
+          { relatedMemo: { name: `memos/${archivedId}` } },
+        ],
+      },
+    })
+    expect(linked.status).toBe(200)
+
+    // 匿名与他人：详情、列表、relations 三条输出路径都不能带出不可读目标
+    for (const token of [undefined, otherToken]) {
+      for (const path of [
+        `/api/v1/memos/${sourceId}`,
+        `/api/v1/memos/${sourceId}/relations`,
+        '/api/v1/memos',
+      ]) {
+        const res = await call('GET', path, { token })
+        expect(res.status).toBe(200)
+        const body = JSON.stringify(res.body)
+        expect(body).not.toContain(marker)
+        expect(body).not.toContain('ARCHIVED_TARGET_MARKER')
+        expect(body).not.toContain(secretId)
+      }
+    }
+
+    // 本人仍然能看到自己的关联目标
+    const own = await call('GET', `/api/v1/memos/${sourceId}/relations`, {
+      token: ownerToken,
+    })
+    expect(JSON.stringify(own.body)).toContain(marker)
   })
 })
 

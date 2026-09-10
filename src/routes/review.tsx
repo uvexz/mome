@@ -1,5 +1,5 @@
 import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useSuspenseQuery } from '@tanstack/react-query'
 import { Button, Loader, Select } from '@cloudflare/kumo'
 import {
@@ -11,12 +11,12 @@ import {
 
 import { HashtagText } from '#/components/hashtag-text'
 import { authClient } from '#/lib/auth-client'
-import { relativeTime } from '#/lib/date'
 import { tagsQueryOptions } from '#/lib/queries'
 import { getReviewMemos } from '#/server/memos'
 import type { MemoWithTags, ReviewMode } from '#/server/memos'
 import { getSessionUser } from '#/server/session'
 import type { TagWithCount } from '#/server/tags'
+import { RelativeTime } from '#/components/relative-time'
 
 const MODES: Array<{ value: ReviewMode; label: string }> = [
   { value: 'least-reviewed', label: '较少回顾' },
@@ -42,8 +42,13 @@ function Review() {
   const [mode, setMode] = useState<ReviewMode>('least-reviewed')
   const [tag, setTag] = useState<string | undefined>()
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const requestRef = useRef(0)
 
   const load = useCallback(async () => {
+    // 请求代次：快速切换 mode/tag 时，旧响应不能覆盖当前筛选的结果
+    const requestId = ++requestRef.current
+    setError(null)
     setLoading(true)
     try {
       const result = await getReviewMemos({
@@ -54,9 +59,15 @@ function Review() {
           tzOffsetMinutes: new Date().getTimezoneOffset(),
         },
       })
-      setItems(result)
+      if (requestRef.current === requestId) setItems(result)
+    } catch (err) {
+      // 只有 finally 时首次失败会让 items 停在 null，UI 永远转圈
+      if (requestRef.current === requestId) {
+        setItems([])
+        setError(err instanceof Error ? err.message : '加载失败')
+      }
     } finally {
-      setLoading(false)
+      if (requestRef.current === requestId) setLoading(false)
     }
   }, [mode, tag])
 
@@ -128,6 +139,13 @@ function Review() {
           <div className="flex justify-center py-16">
             <Loader />
           </div>
+        ) : error ? (
+          <div className="flex flex-col items-center gap-3 py-16">
+            <p className="text-sm text-kumo-subtle">{error}</p>
+            <Button variant="secondary" onClick={() => void load()}>
+              重试
+            </Button>
+          </div>
         ) : items.length === 0 ? (
           <p className="py-16 text-center text-sm text-kumo-subtle">
             当前范围内没有可回顾的 memo。
@@ -160,7 +178,7 @@ function Review() {
                     className="font-mono text-xs text-kumo-subtle hover:text-accent"
                   >
                     <time dateTime={memo.createdAt}>
-                      {relativeTime(memo.createdAt)}
+                      {<RelativeTime iso={memo.createdAt} />}
                     </time>
                   </button>
                   <Button

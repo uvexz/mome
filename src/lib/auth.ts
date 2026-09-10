@@ -5,6 +5,7 @@ import { emailOTP, oneTimeToken, username } from 'better-auth/plugins'
 
 import { db } from '#/db'
 import { sendOtpEmail } from '#/lib/email'
+import { TRUSTED_PROXY_COUNT } from '#/server/rate-limit'
 
 const authUrl = process.env.BETTER_AUTH_URL ?? 'http://localhost:3000'
 
@@ -117,6 +118,13 @@ export const auth = betterAuth({
   // 会话 cookie 明文传输（站点应整体部署在 TLS 之后）
   advanced: {
     useSecureCookies: process.env.NODE_ENV === 'production',
+    // Better Auth 的限流有自己的 IP 解析，默认无条件信任 X-Forwarded-For。
+    // 与项目的 MOME_TRUSTED_PROXY_COUNT 保持同一信任边界：应用直连时
+    // （count=0，XFF 完全可伪造）不读取任何 IP 头，退化为共享桶，
+    // 而不是让客户端换个 XFF 就拿到一个新的登录失败配额。
+    ipAddress: {
+      ipAddressHeaders: TRUSTED_PROXY_COUNT === 0 ? [] : ['x-forwarded-for'],
+    },
   },
   // 本地开发端口不定（vite 自动 +1），显式信任；仅开发环境追加 localhost
   trustedOrigins: [

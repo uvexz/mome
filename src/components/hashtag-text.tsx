@@ -159,9 +159,20 @@ function transformInline(children: ReactNode): ReactNode {
       return <InlineHashtags text={String(child)} />
     }
     if (isValidElement(child)) {
-      const type = child.type as string
+      // ReactMarkdown 用 markdownComponents 里的函数作为元素类型，
+      // 这里必须按函数身份比较：字符串标签名永远不会匹配
+      const type: unknown = child.type
       // 链接/代码内保持纯文本，避免嵌套按钮或破坏代码内容
-      if (type === 'a' || type === 'code' || type === 'pre') return child
+      if (
+        type === 'a' ||
+        type === 'code' ||
+        type === 'pre' ||
+        type === markdownComponents.a ||
+        type === markdownComponents.code ||
+        type === markdownComponents.pre
+      ) {
+        return child
+      }
       const props = child.props as { children?: ReactNode }
       return cloneElement(child as ReactElement<{ children?: ReactNode }>, {
         children: transformInline(props.children),
