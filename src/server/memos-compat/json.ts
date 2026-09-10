@@ -28,27 +28,55 @@ export function parseTimestamp(
 }
 
 /**
- * 分页游标：Mome 用不透明的 base64url JSON 承载 offset。
+ * 分页游标：Mome 用不透明的 base64url JSON 承载分页位置。
  * Memos 官方游标是 protobuf PageToken{limit, offset}，客户端只当作不透明字符串回传。
+ *
+ * 默认排序（create_time desc, id desc）下使用 keyset：token 带上最后一条的
+ * 排序值与稳定 ID，深页不再随已跳过的记录数变慢，中途插入新记录也不会让
+ * 下一页边界漂移。其他 orderBy 仍退回 offset。
+ * 旧版本发出的 `{o}` token 继续可用。
  */
+export interface PageCursor {
+  offset: number
+  keyset?: { createdAt: number; id: string }
+}
+
 export function encodePageToken(offset: number): string {
   return Buffer.from(JSON.stringify({ o: offset })).toString('base64url')
 }
 
-export function decodePageToken(token: string | null): number {
-  if (!token) return 0
+export function encodeKeysetPageToken(createdAt: Date, id: string): string {
+  return Buffer.from(
+    JSON.stringify({ v: 2, t: createdAt.getTime(), i: id }),
+  ).toString('base64url')
+}
+
+export function decodePageToken(token: string | null): PageCursor {
+  if (!token) return { offset: 0 }
   try {
     const parsed: unknown = JSON.parse(
       Buffer.from(token, 'base64url').toString(),
     )
-    if (parsed && typeof parsed === 'object' && 'o' in parsed) {
-      const offset = parsed.o
-      if (
-        typeof offset === 'number' &&
-        Number.isInteger(offset) &&
-        offset >= 0
-      ) {
-        return offset
+    if (parsed && typeof parsed === 'object') {
+      if ('t' in parsed && 'i' in parsed) {
+        const { t, i } = parsed
+        if (
+          typeof t === 'number' &&
+          Number.isFinite(t) &&
+          typeof i === 'string'
+        ) {
+          return { offset: 0, keyset: { createdAt: t, id: i } }
+        }
+      }
+      if ('o' in parsed) {
+        const offset = parsed.o
+        if (
+          typeof offset === 'number' &&
+          Number.isInteger(offset) &&
+          offset >= 0
+        ) {
+          return { offset }
+        }
       }
     }
   } catch {

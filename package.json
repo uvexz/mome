@@ -38,7 +38,7 @@
     "better-auth": "^1.7.0",
     "blobatar": "^0.2.0",
     "drizzle-orm": "^0.45.1",
-    "nodemailer": "^9.0.5",
+    "nodemailer": "^9.1.1",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

@@ -5,14 +5,15 @@
  * - 匿名：仅 PUBLIC 且未归档、未删除的 memo；
  * - 已认证：自己的全部 memo（含归档/回收站）+ 他人的 PUBLIC 且未归档 memo。
  */
-import { and, asc, desc, eq, inArray, isNull, or } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm'
 import type { SQL } from 'drizzle-orm'
 
 import { db } from '#/db'
 import { memoLikes, memoLinks, memos, memoTags, tags, user } from '#/db/schema'
 import { Code, MemosError } from './errors'
 import { compileMemosFilter } from './cel'
-import { encodePageToken } from './json'
+import { encodeKeysetPageToken, encodePageToken } from './json'
+import type { PageCursor } from './json'
 import type { CompatActor } from './auth'
 import type { MemoJsonInput, MemosState, ReactionView } from './dto'
 
@@ -33,7 +34,7 @@ function readAcl(actor: CompatActor | null, includeDeleted: boolean): SQL {
 
 export interface ListMemosCompatParams {
   pageSize: number
-  offset: number
+  cursor: PageCursor
   state?: MemosState
   filter?: string
   orderBy?: string
@@ -140,7 +141,13 @@ async function loadReactions(
   return result
 }
 
-async function loadRelations(
+/**
+ * 关联目标必须套用与单资源读取相同的 ACL：用户可以引用自己的私有 memo，
+ * 若这里只过滤 deletedAt，公开源 memo 会把私有目标的 ID 与摘要一并泄露。
+ * 不可读的目标整条省略，而不是只隐藏 snippet。
+ */
+export async function loadRelations(
+  actor: CompatActor | null,
   memoIds: string[],
 ): Promise<Map<string, MemoJsonInput['relations']>> {
   const result = new Map<string, MemoJsonInput['relations']>()
@@ -153,7 +160,7 @@ async function loadRelations(
     })
     .from(memoLinks)
     .innerJoin(memos, eq(memos.id, memoLinks.targetId))
-    .where(and(inArray(memoLinks.sourceId, memoIds), isNull(memos.deletedAt)))
+    .where(and(inArray(memoLinks.sourceId, memoIds), readAcl(actor, false)))
   for (const row of rows) {
     const list = result.get(row.sourceId) ?? []
     list.push({
@@ -166,13 +173,16 @@ async function loadRelations(
   return result
 }
 
-async function toMemoInputs(rows: MemoRow[]): Promise<MemoJsonInput[]> {
+async function toMemoInputs(
+  actor: CompatActor | null,
+  rows: MemoRow[],
+): Promise<MemoJsonInput[]> {
   const memoIds = rows.map((row) => row.id)
   const ownerIds = [...new Set(rows.map((row) => row.userId))]
   const [tagPaths, reactions, relations] = await Promise.all([
     loadTagPaths(memoIds, ownerIds),
     loadReactions(memoIds),
-    loadRelations(memoIds),
+    loadRelations(actor, memoIds),
   ])
   return rows.map((row) => ({
     row,
@@ -197,22 +207,45 @@ export async function listMemosForCompat(
     const compiled = await compileMemosFilter(params.filter)
     if (compiled) conditions.push(compiled)
   }
+  // 默认排序可用 keyset：深页不随 offset 变慢，也不会因新记录插入而漂移。
+  // 其他 orderBy 仍走 offset（正确但深页较慢），旧的 offset token 继续兼容。
+  const keysetable = isDefaultOrder(params.orderBy)
+  const cursor = params.cursor
+  if (keysetable && cursor.keyset) {
+    conditions.push(
+      sql`(${memos.createdAt}, ${memos.id}) < (${cursor.keyset.createdAt}, ${cursor.keyset.id})`,
+    )
+  }
+  const offset = cursor.keyset ? 0 : cursor.offset
   const rows = await db
     .select()
     .from(memos)
     .where(and(...conditions))
     .orderBy(...orderExpressions(params.orderBy))
     .limit(params.pageSize + 1)
-    .offset(params.offset)
+    .offset(offset)
 
   const hasMore = rows.length > params.pageSize
   const page = rows.slice(0, params.pageSize)
+  const last = page.at(-1)
   return {
-    items: await toMemoInputs(page),
-    nextPageToken: hasMore
-      ? encodePageToken(params.offset + params.pageSize)
-      : '',
+    items: await toMemoInputs(actor, page),
+    nextPageToken: !hasMore
+      ? ''
+      : keysetable && last
+        ? encodeKeysetPageToken(last.createdAt, last.id)
+        : encodePageToken(offset + params.pageSize),
   }
+}
+
+/** 默认排序等价于 create_time desc, id desc，只有它能安全地转成 keyset */
+function isDefaultOrder(orderBy: string | undefined): boolean {
+  if (!orderBy) return true
+  const parts = orderBy.split(',').map((part) => part.trim().toLowerCase())
+  return (
+    parts.length === 1 &&
+    (parts[0] === 'create_time' || parts[0] === 'create_time desc')
+  )
 }
 
 /** 读取单条可读 memo；不可读、已删除与不存在同样返回 NOT_FOUND，避免泄漏存在性 */
@@ -237,7 +270,7 @@ export async function loadMemoForCompat(
   memoId: string,
 ): Promise<MemoJsonInput> {
   const row = await loadMemoRowForCompat(actor, memoId)
-  const [input] = await toMemoInputs([row])
+  const [input] = await toMemoInputs(actor, [row])
   return input
 }
 

@@ -23,6 +23,7 @@ import type { memoComments } from '#/db/schema'
 import { auth } from '#/lib/auth'
 import { MAX_CONTENT } from '#/lib/limits'
 import { createApiKeyForUser, revokeApiKeyForUser } from '../api-keys-core'
+import { isPasswordLoginBlocked } from '../auth-policy'
 import {
   addCommentForUser,
   listCommentsForMemo,
@@ -44,7 +45,9 @@ import {
   readRefreshCookie,
   refreshCookie,
   requireActor,
-  verifyRefreshToken,
+  consumeRefreshToken,
+  refreshTokenSubject,
+  revokeRefreshTokensForUser,
 } from './auth'
 import type { CompatActor } from './auth'
 import {
@@ -58,6 +61,7 @@ import {
 import {
   clampPageSize,
   decodePageToken,
+  encodePageToken,
   parseFieldMask,
   parseTimestamp,
   resourceId,
@@ -75,6 +79,7 @@ import {
 } from './dto'
 import {
   listMemosForCompat,
+  loadRelations,
   listUserRows,
   loadMemoForCompat,
   loadMemoRowForCompat,
@@ -91,10 +96,39 @@ interface Ctx {
 
 type Handler = (ctx: Ctx) => Promise<Response>
 
+/** 兼容层解析前的正文上限，与原生 /v1 的 MAX_BODY_BYTES 保持同一口径 */
+const MAX_COMPAT_BODY_BYTES = 1024 * 1024
+
+async function readBodyText(request: Request): Promise<string> {
+  const declared = request.headers.get('content-length')
+  if (declared) {
+    const size = Number(declared)
+    if (!Number.isFinite(size) || size > MAX_COMPAT_BODY_BYTES) {
+      throw new MemosError(Code.INVALID_ARGUMENT, '请求体过大')
+    }
+  }
+  if (!request.body) return ''
+  // chunked / 无 Content-Length 时也要在解析前按字节截断
+  const reader = request.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    total += value.byteLength
+    if (total > MAX_COMPAT_BODY_BYTES) {
+      await reader.cancel().catch(() => undefined)
+      throw new MemosError(Code.INVALID_ARGUMENT, '请求体过大')
+    }
+    chunks.push(value)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
 async function readJsonObject(
   request: Request,
 ): Promise<Record<string, unknown>> {
-  const text = await request.text()
+  const text = await readBodyText(request)
   if (!text.trim()) return {}
   try {
     const parsed: unknown = JSON.parse(text)
@@ -102,7 +136,8 @@ async function readJsonObject(
       throw new Error('not an object')
     }
     return parsed as Record<string, unknown>
-  } catch {
+  } catch (error) {
+    if (error instanceof MemosError) throw error
     throw new MemosError(Code.INVALID_ARGUMENT, '请求体不是合法的 JSON 对象')
   }
 }
@@ -137,6 +172,49 @@ function checkContentLength(content: string): void {
       `content 不能超过 ${MAX_CONTENT} 个字符`,
     )
   }
+}
+
+/**
+ * cookie 凭据（浏览器会话 / refresh cookie）驱动的写操作必须来自可信 Origin：
+ * SameSite=Lax 不阻止同站不同源页面发出的简单请求。
+ * Bearer 客户端不带 cookie，也常常不带 Origin，这里不受影响。
+ */
+function assertTrustedOriginForCookieWrite(request: Request): void {
+  const method = request.method.toUpperCase()
+  if (method === 'GET' || method === 'HEAD') return
+  if (!request.headers.get('cookie')) return
+  const origin = request.headers.get('origin')
+  const referer = request.headers.get('referer')
+  const source = origin ?? (referer ? safeOrigin(referer) : null)
+  // 没有 Origin/Referer 的写请求不可能来自浏览器页面（fetch/XHR 一定带 Origin），
+  // 但它带了 cookie：保守放行会重新打开缺口，因此一并拒绝。
+  if (!source || !isTrustedOrigin(source)) {
+    throw new MemosError(
+      Code.PERMISSION_DENIED,
+      'cookie 鉴权的写操作必须来自可信 Origin；跨源客户端请改用 Bearer token',
+    )
+  }
+}
+
+function safeOrigin(value: string): string | null {
+  try {
+    return new URL(value).origin
+  } catch {
+    return null
+  }
+}
+
+function isTrustedOrigin(origin: string): boolean {
+  const configured = process.env.BETTER_AUTH_URL
+  const allowed = new Set<string>()
+  if (configured) allowed.add(safeOrigin(configured) ?? configured)
+  if (process.env.NODE_ENV !== 'production') {
+    allowed.add('http://localhost:3000')
+    allowed.add('http://localhost:3001')
+    allowed.add('http://127.0.0.1:3000')
+    allowed.add('http://127.0.0.1:3001')
+  }
+  return allowed.has(origin)
 }
 
 async function limit(key: string, window: number, max: number): Promise<void> {
@@ -202,6 +280,15 @@ const authSignin: Handler = async ({ request }) => {
   }
   await limit(`signin:${clientIp()}:${username}`, 60, 10)
 
+  // 与站点登录入口共用邮箱验证策略：兼容层不能自带一套更宽松的判断
+  if (
+    await isPasswordLoginBlocked(
+      username.includes('@') ? { email: username } : { username },
+    )
+  ) {
+    throw new MemosError(Code.UNAUTHENTICATED, '用户名或密码错误')
+  }
+
   let userId: string | null = null
   try {
     const result = await auth.api.signInUsername({
@@ -228,7 +315,7 @@ const authSignin: Handler = async ({ request }) => {
 
   const row = await loadUserRow(userId)
   const access = issueAccessToken(row.id, row.username)
-  const refresh = issueRefreshToken(row.id)
+  const refresh = await issueRefreshToken(row.id)
   return memosJson(
     {
       user: userJson(row, {
@@ -248,7 +335,7 @@ const authSignin: Handler = async ({ request }) => {
 
 const authRefresh: Handler = async ({ request }) => {
   const token = readRefreshCookie(request)
-  const userId = token ? verifyRefreshToken(token) : null
+  const userId = token ? await consumeRefreshToken(token) : null
   if (!userId) {
     throw new MemosError(
       Code.UNAUTHENTICATED,
@@ -257,7 +344,7 @@ const authRefresh: Handler = async ({ request }) => {
   }
   const row = await loadUserRow(userId)
   const access = issueAccessToken(row.id, row.username)
-  const refresh = issueRefreshToken(row.id)
+  const refresh = await issueRefreshToken(row.id)
   return memosJson(
     {
       accessToken: access.accessToken,
@@ -271,8 +358,13 @@ const authRefresh: Handler = async ({ request }) => {
   )
 }
 
-const authSignout: Handler = async () =>
-  memosJson({}, { headers: { 'Set-Cookie': clearRefreshCookie() } })
+const authSignout: Handler = async ({ request }) => {
+  // 退出必须让服务端 refresh 记录失效，仅清 cookie 挡不住已被复制的凭据
+  const token = readRefreshCookie(request)
+  const userId = token ? refreshTokenSubject(token) : null
+  if (userId) await revokeRefreshTokensForUser(userId)
+  return memosJson({}, { headers: { 'Set-Cookie': clearRefreshCookie() } })
+}
 
 // ── memos ───────────────────────────────────────────────
 const MEMO_ID_PATTERN = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,34}[a-zA-Z0-9])?$/
@@ -289,7 +381,7 @@ const memosList: Handler = async ({ request, url }) => {
         : undefined
   const { items, nextPageToken } = await listMemosForCompat(actor, {
     pageSize: clampPageSize(url.searchParams.get('pageSize'), 50, 1000),
-    offset: decodePageToken(url.searchParams.get('pageToken')),
+    cursor: decodePageToken(url.searchParams.get('pageToken')),
     state,
     filter: url.searchParams.get('filter') ?? undefined,
     orderBy: url.searchParams.get('orderBy') ?? undefined,
@@ -547,17 +639,13 @@ const relationsList: Handler = async ({ request, params }) => {
   await limitRead(actor)
   const memoId = params.memo
   await loadMemoRowForCompat(actor, memoId)
-  const rows = await db
-    .select({ targetId: memoLinks.targetId, content: memos.content })
-    .from(memoLinks)
-    .innerJoin(memos, eq(memos.id, memoLinks.targetId))
-    .where(and(eq(memoLinks.sourceId, memoId), isNull(memos.deletedAt)))
+  const targets = await loadRelations(actor, [memoId])
   return memosJson({
-    relations: rows.map((row) => ({
+    relations: (targets.get(memoId) ?? []).map((row) => ({
       memo: { name: memoName(memoId) },
       relatedMemo: {
-        name: memoName(row.targetId),
-        snippet: row.content.slice(0, 120),
+        name: memoName(row.relatedMemoId),
+        snippet: row.snippet,
       },
       type: 'REFERENCE',
     })),
@@ -631,23 +719,38 @@ function usernameFilter(filter: string | null): string | undefined {
   return match[1]
 }
 
+/** 批量查询管理员身份，避免每行一次数据库往返 */
+async function loadAdminIds(userIds: string[]): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set()
+  const rows = await db
+    .select({ userId: adminUsers.userId })
+    .from(adminUsers)
+    .where(inArray(adminUsers.userId, userIds))
+  return new Set(rows.map((row) => row.userId))
+}
+
 const usersList: Handler = async ({ request, url }) => {
   const actor = await requireActor(request)
   await limitRead(actor)
-  const { rows } = await listUserRows({
-    limit: clampPageSize(url.searchParams.get('pageSize'), 50, 1000),
-    offset: decodePageToken(url.searchParams.get('pageToken')),
+  const pageSize = clampPageSize(url.searchParams.get('pageSize'), 50, 1000)
+  const offset = decodePageToken(url.searchParams.get('pageToken')).offset
+  const { rows, hasMore } = await listUserRows({
+    limit: pageSize,
+    offset,
     username: usernameFilter(url.searchParams.get('filter')),
   })
-  const users = await Promise.all(
-    rows.map(async (row) =>
-      userJson(row, {
-        isAdmin: await isAdminUser(row.id),
-        includeEmail: actor.isAdmin || row.id === actor.id,
-      }),
-    ),
+  // 角色一次批量查询：逐行 isAdminUser 在 pageSize 最大 1000 时是真正的 N+1
+  const admins = await loadAdminIds(rows.map((row) => row.id))
+  const users = rows.map((row) =>
+    userJson(row, {
+      isAdmin: admins.has(row.id),
+      includeEmail: actor.isAdmin || row.id === actor.id,
+    }),
   )
-  return memosJson({ users, nextPageToken: '' })
+  return memosJson({
+    users,
+    nextPageToken: hasMore ? encodePageToken(offset + pageSize) : '',
+  })
 }
 
 const usersBatchGet: Handler = async ({ request }) => {
@@ -660,13 +763,12 @@ const usersBatchGet: Handler = async ({ request }) => {
     ids.length === 0
       ? []
       : await db.select().from(user).where(inArray(user.id, ids))
-  const users = await Promise.all(
-    rows.map(async (row) =>
-      userJson(row, {
-        isAdmin: await isAdminUser(row.id),
-        includeEmail: actor.isAdmin || row.id === actor.id,
-      }),
-    ),
+  const admins = await loadAdminIds(rows.map((row) => row.id))
+  const users = rows.map((row) =>
+    userJson(row, {
+      isAdmin: admins.has(row.id),
+      includeEmail: actor.isAdmin || row.id === actor.id,
+    }),
   )
   return memosJson({ users })
 }
@@ -945,6 +1047,7 @@ function isKnownUnimplemented(method: string, segments: string[]): boolean {
 export async function handleMemosCompat(request: Request): Promise<Response> {
   try {
     if (request.method === 'OPTIONS') return corsResponse()
+    assertTrustedOriginForCookieWrite(request)
     const url = new URL(request.url)
     const segments = url.pathname
       .replace(/^\/api\/v1\/?/, '')

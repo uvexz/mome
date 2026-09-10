@@ -13,6 +13,7 @@ import { authClient } from '#/lib/auth-client'
 import { appConfigQueryOptions, queryKeys } from '#/lib/queries'
 import {
   clearComposerDraft,
+  countUnclaimedQueuedMemos,
   enqueueMemo,
   incrementQueuedMemoAttempts,
   listQueuedMemos,
@@ -26,7 +27,7 @@ import { createMemo } from '#/server/memos'
 import type { MemoWithTags } from '#/server/memos'
 import { getUploadUrl } from '#/server/upload'
 
-/** 在线重发同一离线条目连续失败该次数后，视为无法恢复并丢弃 */
+/** 在线重发同一离线条目连续失败该次数后，停止重试但保留内容 */
 const MAX_OUTBOX_ATTEMPTS = 3
 
 // 模块级 flush 锁：多个 Composer 实例 / StrictMode 双挂载也不会并发重发同一个 outbox
@@ -68,6 +69,7 @@ export function Composer({
     'idle' | 'saving' | 'saved' | 'queued'
   >('idle')
   const contentRef = useRef('')
+  const visibilityRef = useRef<'public' | 'private'>('private')
   const fileRef = useRef<HTMLInputElement>(null)
   const initializedRef = useRef(false)
   const draftKeyRef = useRef<string | null>(null)
@@ -76,9 +78,10 @@ export function Composer({
   onCreatedRef.current = onCreated
   onErrorRef.current = onError
   contentRef.current = content
+  visibilityRef.current = visibility
+  const userId = session?.user.id ?? null
 
   useEffect(() => {
-    const userId = session?.user.id
     if (!userId) return
     const key = `${userId}:${draftScope}`
     draftKeyRef.current = key
@@ -88,7 +91,10 @@ export function Composer({
       .catch(() => null)
       .then((draft) => {
         if (cancelled) return
-        setContent(initialContent.trim() || draft?.content || '')
+        // 加载期间用户已经开始输入时，不要用草稿覆盖
+        if (!contentRef.current) {
+          setContent(initialContent.trim() || draft?.content || '')
+        }
         setVisibility(
           initialVisibility ?? draft?.visibility ?? config.defaultVisibility,
         )
@@ -104,7 +110,7 @@ export function Composer({
     draftScope,
     initialContent,
     initialVisibility,
-    session?.user.id,
+    userId,
   ])
 
   useEffect(() => {
@@ -126,13 +132,29 @@ export function Composer({
     return () => window.clearTimeout(timer)
   }, [content, visibility])
 
+  // 卸载/跳转时补写一次未落盘的防抖草稿
   useEffect(() => {
+    return () => {
+      const key = draftKeyRef.current
+      if (!key || !initializedRef.current || !contentRef.current.trim()) return
+      void saveComposerDraft(key, {
+        content: contentRef.current,
+        visibility: visibilityRef.current,
+        updatedAt: Date.now(),
+      }).catch(() => undefined)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!userId) return
     async function flushOutbox() {
-      if (flushingOutbox || !isBrowserOnline()) return
+      if (flushingOutbox || !isBrowserOnline() || !userId) return
       flushingOutbox = true
       try {
-        const queued = await listQueuedMemos()
+        const queued = await listQueuedMemos(userId)
         for (const item of queued) {
+          // 已达重试上限：跳过而不删除，内容留在 outbox 里等人工处理
+          if ((item.attempts ?? 0) >= MAX_OUTBOX_ATTEMPTS) continue
           try {
             const memo = await createMemo({
               data: {
@@ -152,12 +174,11 @@ export function Composer({
           } catch (error) {
             if (!isBrowserOnline()) break
             // 在线状态下的失败：可能是服务端校验拒绝（永远不会成功），
-            // 也可能是瞬时故障——用失败计数区分，超限丢弃防"毒丸"堵死队列
+            // 也可能是瞬时故障——用失败计数区分，超限后停止重试但保留原文
             const attempts = await incrementQueuedMemoAttempts(item.id)
             if (attempts >= MAX_OUTBOX_ATTEMPTS) {
-              await removeQueuedMemo(item.id)
               onErrorRef.current(
-                `离线内容连续 ${attempts} 次发送失败，已停止重试`,
+                `离线内容连续 ${attempts} 次发送失败，已停止重试；内容仍保留在待发送队列中`,
               )
             } else {
               onErrorRef.current(
@@ -175,13 +196,45 @@ export function Composer({
     void flushOutbox()
     window.addEventListener('online', flushOutbox)
     return () => window.removeEventListener('online', flushOutbox)
-  }, [queryClient])
+  }, [queryClient, userId])
+
+  // 旧版本（无作者字段）或其他账号留下的待发送内容：提示而不是替他们发送
+  useEffect(() => {
+    if (!userId) return
+    let cancelled = false
+    void countUnclaimedQueuedMemos(userId)
+      .then((count) => {
+        if (cancelled || count === 0) return
+        onErrorRef.current(
+          `本浏览器还有 ${count} 条其他账号的待发送内容，已隔离不会自动发送`,
+        )
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [userId])
+
+  // 同账号多个标签共用一个 draft key：只清掉与本次发送一致的草稿，
+  // 避免删掉另一个标签正在编辑的内容
+  async function clearDraftIfMatches(key: string, text: string) {
+    const draft = await loadComposerDraft(key).catch(() => null)
+    if (!draft || draft.content.trim() === text) await clearComposerDraft(key)
+  }
 
   async function submit() {
     const text = content.trim()
     if (!text || submitting) return
+    if (uploading) {
+      onError('图片上传中，请等待上传完成后再发送')
+      return
+    }
     if (text.length > MAX_CONTENT) {
       onError(`内容超过 ${MAX_CONTENT} 字上限，请拆分后再发布`)
+      return
+    }
+    if (!userId) {
+      onError('登录状态已失效，请重新登录后再发送')
       return
     }
     const clientId = crypto.randomUUID()
@@ -190,6 +243,7 @@ export function Composer({
       if (!navigator.onLine) {
         await enqueueMemo({
           id: clientId,
+          userId,
           content: text,
           visibility,
           createdAt: Date.now(),
@@ -197,7 +251,7 @@ export function Composer({
         setContent('')
         setDraftStatus('queued')
         if (draftKeyRef.current) {
-          await clearComposerDraft(draftKeyRef.current)
+          await clearDraftIfMatches(draftKeyRef.current, text)
         }
         onQueued?.()
         return
@@ -209,7 +263,7 @@ export function Composer({
       setContent('')
       setDraftStatus('idle')
       if (draftKeyRef.current) {
-        await clearComposerDraft(draftKeyRef.current)
+        await clearDraftIfMatches(draftKeyRef.current, text)
       }
       if (!memo.deletedAt) {
         void queryClient.invalidateQueries({
@@ -222,6 +276,7 @@ export function Composer({
       if (!navigator.onLine) {
         await enqueueMemo({
           id: clientId,
+          userId,
           content: text,
           visibility,
           createdAt: Date.now(),
@@ -368,7 +423,7 @@ export function Composer({
             variant="primary"
             icon={<ArrowUpRight size={14} />}
             loading={submitting}
-            disabled={!content.trim()}
+            disabled={!content.trim() || uploading}
             onClick={() => void submit()}
             className="h-8"
           >

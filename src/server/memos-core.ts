@@ -33,6 +33,7 @@ import {
 } from '#/lib/hashtags'
 import { MAX_CONTENT } from '#/lib/limits'
 import { parseMemoReferences } from '#/lib/memo-links'
+import { escapeLike } from '#/lib/search'
 import { ulid } from '#/lib/ulid'
 import { AppError } from './error-shield'
 import {
@@ -43,6 +44,9 @@ import {
 } from './interactions-core'
 import type { MemoCounts, ViewerState } from './interactions-core'
 import { isAdminUser } from './settings-core'
+
+/** trigram FTS 能构造 token 的最小 Unicode 字符数 */
+export const FTS_MIN_QUERY_CHARS = 3
 
 export { MAX_CONTENT }
 
@@ -257,8 +261,20 @@ async function syncImportedRelations(
   }
 }
 
-function contentSearchCondition(query: string): SQL {
-  const phrase = `"${query.trim().replace(/"/g, '""')}"`
+/**
+ * 正文搜索条件。
+ *
+ * FTS5 使用 trigram 分词，不足 3 个 Unicode 字符的查询无法构造 token，
+ * MATCH 永远返回空（中文双字词是常见查询，例如「审计」）。这类短查询退回
+ * 基础表 LIKE；调用方已经带上了用户/可见性/软删除过滤，因此扫描范围仍限制在
+ * 调用者可读的 memo 内。
+ */
+export function contentSearchCondition(query: string): SQL {
+  const trimmed = query.trim()
+  if ([...trimmed].length < FTS_MIN_QUERY_CHARS) {
+    return sql`${memos.content} LIKE ${`%${escapeLike(trimmed)}%`} ESCAPE '\\'`
+  }
+  const phrase = `"${trimmed.replace(/"/g, '""')}"`
   return sql`${memos.id} IN (
     SELECT id FROM memos_fts WHERE memos_fts MATCH ${phrase}
   )`
@@ -445,6 +461,8 @@ export async function listMemosForUser(
   }
 
   // keyset 游标：{ p: pinned, c: createdAt ms, i: id }
+  // 单个排序分区内用元组比较（SQLite 可当范围定位），跨分区仍保留 OR：
+  // OR 形式在深页会被迫从最新一条线性扫描到游标位置。
   let cursorCond: ReturnType<typeof and> | undefined
   if (params.cursor) {
     const cur = parseCursor(params.cursor)
@@ -453,28 +471,23 @@ export async function listMemosForUser(
       const cursorConditions =
         params.filter === 'deleted'
           ? [
-              lt(memos.deletedAt, cDate),
-              and(eq(memos.deletedAt, cDate), lt(memos.id, cur.i)),
+              sql`(${memos.deletedAt}, ${memos.id}) < (${cDate.getTime()}, ${cur.i})`,
             ]
           : cur.p === 1
             ? [
                 // 置顶区内部
-                and(eq(memos.pinned, true), lt(memos.createdAt, cDate)),
                 and(
                   eq(memos.pinned, true),
-                  eq(memos.createdAt, cDate),
-                  lt(memos.id, cur.i),
+                  sql`(${memos.createdAt}, ${memos.id}) < (${cDate.getTime()}, ${cur.i})`,
                 ),
                 // 已读完全部置顶，进入普通区
                 and(eq(memos.pinned, false)),
               ]
             : [
                 // 普通区内部
-                and(eq(memos.pinned, false), lt(memos.createdAt, cDate)),
                 and(
                   eq(memos.pinned, false),
-                  eq(memos.createdAt, cDate),
-                  lt(memos.id, cur.i),
+                  sql`(${memos.createdAt}, ${memos.id}) < (${cDate.getTime()}, ${cur.i})`,
                 ),
               ]
       cursorCond = or(...cursorConditions)

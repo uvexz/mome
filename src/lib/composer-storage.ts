@@ -6,10 +6,15 @@ export interface ComposerDraft {
 
 export interface QueuedMemo {
   id: string
+  /**
+   * 入队时已登录的用户 ID。缺失表示旧版本写入的条目：这些条目不属于任何已知
+   * 作者，只能隔离等待人工恢复，绝不能自动归属到"下一位登录者"。
+   */
+  userId?: string
   content: string
   visibility: 'public' | 'private'
   createdAt: number
-  /** 在线重发失败次数；超过上限的"毒丸"条目会被丢弃而非无限重试 */
+  /** 在线重发失败次数；超过上限后停止重试，但保留内容 */
   attempts?: number
 }
 
@@ -77,7 +82,9 @@ export async function clearComposerDraft(key: string): Promise<void> {
   }
 }
 
-export async function enqueueMemo(item: QueuedMemo): Promise<void> {
+export async function enqueueMemo(
+  item: QueuedMemo & { userId: string },
+): Promise<void> {
   const db = await openDb()
   try {
     const transaction = db.transaction('outbox', 'readwrite')
@@ -87,7 +94,7 @@ export async function enqueueMemo(item: QueuedMemo): Promise<void> {
   }
 }
 
-export async function listQueuedMemos(): Promise<QueuedMemo[]> {
+async function allQueuedMemos(): Promise<QueuedMemo[]> {
   const db = await openDb()
   try {
     const transaction = db.transaction('outbox', 'readonly')
@@ -98,6 +105,19 @@ export async function listQueuedMemos(): Promise<QueuedMemo[]> {
   } finally {
     db.close()
   }
+}
+
+/** 只返回指定作者的待发送条目：共享浏览器切换账号后不能替别人重发 */
+export async function listQueuedMemos(userId: string): Promise<QueuedMemo[]> {
+  return (await allQueuedMemos()).filter((item) => item.userId === userId)
+}
+
+/** 无作者（旧版本）或属于其他账号的条目数量，仅用于提示人工恢复 */
+export async function countUnclaimedQueuedMemos(
+  userId: string,
+): Promise<number> {
+  return (await allQueuedMemos()).filter((item) => item.userId !== userId)
+    .length
 }
 
 export async function removeQueuedMemo(id: string): Promise<void> {

@@ -30,6 +30,7 @@ import { escapeLike } from '#/lib/search'
 
 import { loadMemoCounts, loadViewerStates } from './interactions-core'
 import {
+  contentSearchCondition,
   groupMemoTags,
   listMemosForUser,
   loadMemoTags,
@@ -301,7 +302,7 @@ async function fetchPinnedMemoRows(
     isNull(memos.deletedAt),
   ]
   if (opts.q) {
-    conditions.push(memoContentSearch(opts.q))
+    conditions.push(contentSearchCondition(opts.q))
   }
   if (opts.tag) {
     const tagIds = await resolveTagIds(userId, opts.tag)
@@ -355,9 +356,9 @@ async function fetchMergedTimeline(
   ]
   if (opts.q) {
     const pattern = sql`${`%${escapeLike(opts.q)}%`} ESCAPE '\\'`
-    conditions.push(memoContentSearch(opts.q))
+    conditions.push(contentSearchCondition(opts.q))
     const repostHit = or(
-      memoContentSearch(opts.q),
+      contentSearchCondition(opts.q),
       like(memoReposts.content, pattern),
     )
     if (repostHit) repostConditions.push(repostHit)
@@ -392,21 +393,16 @@ async function fetchMergedTimeline(
     // - 另一侧流按"同刻是否已输出"收紧：游标是 memo 时同刻 repost 尚未输出（<=），
     //   游标是 repost 时同刻 memo 已全部输出（<）。否则另一侧流无约束会重复输出。
     if (cur.k === 'memo') {
-      const memoCond = or(
-        lt(memos.createdAt, new Date(cur.t)),
-        and(eq(memos.createdAt, new Date(cur.t)), lt(memos.id, cur.i)),
+      // 元组比较而非 OR：SQLite 只有前者能把 (created_at, id) 当范围定位，
+      // OR 写法在深页会从最新一条线性扫到游标位置
+      conditions.push(
+        sql`(${memos.createdAt}, ${memos.id}) < (${new Date(cur.t).getTime()}, ${cur.i})`,
       )
-      if (memoCond) conditions.push(memoCond)
       repostConditions.push(lte(memoReposts.createdAt, new Date(cur.t)))
     } else {
-      const repostCond = or(
-        lt(memoReposts.createdAt, new Date(cur.t)),
-        and(
-          eq(memoReposts.createdAt, new Date(cur.t)),
-          lt(memoReposts.memoId, cur.i),
-        ),
+      repostConditions.push(
+        sql`(${memoReposts.createdAt}, ${memoReposts.memoId}) < (${new Date(cur.t).getTime()}, ${cur.i})`,
       )
-      if (repostCond) repostConditions.push(repostCond)
       conditions.push(lt(memos.createdAt, new Date(cur.t)))
     }
   }
@@ -506,13 +502,6 @@ async function fetchMergedTimeline(
       : null,
   }))
   return { items }
-}
-
-function memoContentSearch(query: string): SQL {
-  const phrase = `"${query.trim().replace(/"/g, '""')}"`
-  return sql`${memos.id} IN (
-    SELECT id FROM memos_fts WHERE memos_fts MATCH ${phrase}
-  )`
 }
 
 function parseHomeCursor(cursor?: string): HomeCursor | null {

@@ -1,4 +1,14 @@
-import { and, count, desc, eq, inArray, isNull, lt, lte, or } from 'drizzle-orm'
+import {
+  and,
+  count,
+  desc,
+  eq,
+  inArray,
+  isNull,
+  lt,
+  lte,
+  sql,
+} from 'drizzle-orm'
 
 import { db } from '#/db'
 import { memoReposts, memos, memoTags, user } from '#/db/schema'
@@ -138,21 +148,15 @@ export async function listPublicFeed(
     // 与合并排序保持一致（时间倒序、同刻 memo 先于 repost）：
     // 游标同侧流用严格 keyset，另一侧流按"同刻是否已输出"收紧，否则会重复输出。
     if (cur.k === 'memo') {
-      const memoCond = or(
-        lt(memos.createdAt, new Date(cur.t)),
-        and(eq(memos.createdAt, new Date(cur.t)), lt(memos.id, cur.i)),
+      // 元组比较：OR 写法 SQLite 无法当范围定位，深页会线性扫描
+      memoConditions.push(
+        sql`(${memos.createdAt}, ${memos.id}) < (${new Date(cur.t).getTime()}, ${cur.i})`,
       )
-      if (memoCond) memoConditions.push(memoCond)
       repostConditions.push(lte(memoReposts.createdAt, new Date(cur.t)))
     } else {
-      const repostCond = or(
-        lt(memoReposts.createdAt, new Date(cur.t)),
-        and(
-          eq(memoReposts.createdAt, new Date(cur.t)),
-          lt(memoReposts.memoId, cur.i),
-        ),
+      repostConditions.push(
+        sql`(${memoReposts.createdAt}, ${memoReposts.memoId}) < (${new Date(cur.t).getTime()}, ${cur.i})`,
       )
-      if (repostCond) repostConditions.push(repostCond)
       memoConditions.push(lt(memos.createdAt, new Date(cur.t)))
     }
   }
@@ -392,10 +396,7 @@ export async function listAllPublicMemos(
         ? eq(memos.globalPinned, false)
         : and(
             eq(memos.globalPinned, false),
-            or(
-              lt(memos.createdAt, new Date(cur.t)),
-              and(eq(memos.createdAt, new Date(cur.t)), lt(memos.id, cur.i)),
-            ),
+            sql`(${memos.createdAt}, ${memos.id}) < (${new Date(cur.t).getTime()}, ${cur.i})`,
           )
     if (cond) conditions.push(cond)
   }

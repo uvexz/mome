@@ -65,7 +65,7 @@ export async function clearFailures(key: string): Promise<void> {
 // - 1（默认）：单层代理（nginx / Cloudflare 等），最右侧条目由该代理写入；
 // - 2+：多层代理依次左移；
 // - 0：应用直接暴露，XFF 整体可伪造，忽略之（限流键退化为 'unknown'）。
-const TRUSTED_PROXY_COUNT = (() => {
+export const TRUSTED_PROXY_COUNT = (() => {
   const raw = Number(process.env.MOME_TRUSTED_PROXY_COUNT ?? '1')
   return Number.isInteger(raw) && raw >= 0 && raw <= 10 ? raw : 1
 })()
