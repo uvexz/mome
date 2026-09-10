@@ -90,6 +90,15 @@ function QuerySessionBoundary({ children }: { children: React.ReactNode }) {
         predicate: (query) =>
           query.getObserversCount() === 0 && query.state.fetchStatus === 'idle',
       })
+      // 仍被观察的查询不能直接移除，但也不能留着上一账号的数据：查询 key 里
+      // 没有身份，新账号会命中同一条缓存并在 staleTime 内直接读到旧数据。
+      // reset 后重新拉取，且不会取消无观察者的 loader 请求。
+      queryClient.resetQueries({
+        predicate: (query) => query.getObserversCount() > 0,
+      })
+      // 剩下的（切换瞬间无观察者但仍在请求中的）查询，其响应可能在切换之后
+      // 才落缓存：全部标记为过期，避免下次挂载时在 staleTime 内直接读到旧数据。
+      queryClient.invalidateQueries({ refetchType: 'none' })
     }
     initialized.current = true
     previousUserId.current = userId

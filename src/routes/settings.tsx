@@ -73,6 +73,7 @@ import type { getMyProfile } from '#/server/profile'
 import type { PasskeyItem } from '#/server/passkeys-core'
 import { getSessionUser } from '#/server/session'
 import { getUploadUrl } from '#/server/upload'
+import { RelativeTime } from '#/components/relative-time'
 
 const settingsSearchSchema = z.object({
   tab: z
@@ -642,7 +643,8 @@ function ProfileSection({
     try {
       const res = await authClient.updateUser({
         name: name.trim() || profile.user.name,
-        bio: bio.trim() || undefined,
+        // 显式发送空字符串：undefined 会被 JSON 省略，清空简介将不生效
+        bio: bio.trim(),
       })
       if (res.error) throw new Error(res.error.message)
       await onSaved()
@@ -791,10 +793,12 @@ function resizeAvatar(file: File): Promise<string> {
         canvas.height = size
         const ctx = canvas.getContext('2d')
         if (!ctx) throw new Error('canvas unsupported')
-        const scale = Math.max(size / img.width, size / img.height)
-        const w = size / scale
-        const h = size / scale
-        ctx.drawImage(img, (size - w) / 2, (size - h) / 2, w, h)
+        // 按短边裁出居中正方形再铺满画布：原写法把 size / scale 同时当作
+        // 目标宽高，等于 min(宽, 高)，会留边或把非正方形图压变形
+        const side = Math.min(img.width, img.height)
+        const sx = (img.width - side) / 2
+        const sy = (img.height - side) / 2
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size)
         URL.revokeObjectURL(url)
         resolve(canvas.toDataURL('image/jpeg', 0.85))
       } catch (err) {
@@ -1088,7 +1092,7 @@ function PasskeysSection({
                     {p.name}
                   </p>
                   <p className="font-mono text-xs text-kumo-subtle">
-                    添加于 {relativeTime(p.createdAt)}
+                    添加于 {<RelativeTime iso={p.createdAt} />}
                     {p.lastUsedAt
                       ? ` · 最近使用 ${relativeTime(p.lastUsedAt)}`
                       : ''}
@@ -1278,7 +1282,8 @@ function ApiKeysSection({
                     {key.name}
                   </p>
                   <p className="truncate font-mono text-xs text-kumo-subtle">
-                    {key.keyPrefix}… · 创建于 {relativeTime(key.createdAt)}
+                    {key.keyPrefix}… · 创建于{' '}
+                    {<RelativeTime iso={key.createdAt} />}
                     {key.lastUsedAt
                       ? ` · 最近使用 ${relativeTime(key.lastUsedAt)}`
                       : ''}

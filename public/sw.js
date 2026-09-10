@@ -56,24 +56,41 @@ function isStaticAsset(url) {
   )
 }
 
-/** vite 构建产物：/assets/xxx.<8+位哈希>.js|css */
+/**
+ * vite 构建产物：/assets/xxx-<哈希>.js|css。
+ * 哈希是 base64url 字母表（例如 index-0N0DftKZ.js），不是纯十六进制：
+ * 只匹配 [a-f0-9] 会让所有真实产物都判为非版本化资源，
+ * 本该 cache-first 的文件每次都走网络，缓存裁剪也永远匹配不到。
+ */
 function isHashedAsset(url) {
-  return /\/assets\/[^/]+[-.][a-f0-9]{8,}\.(?:css|js)$/i.test(url.pathname)
+  return /\/assets\/[^/]+[-.][A-Za-z0-9_-]{8,}\.(?:css|js|woff2?)$/.test(
+    url.pathname,
+  )
 }
 
-function fetchAndCache(request) {
+/** 后台写缓存的 promise；由 fetch 事件用 waitUntil 延长生命周期 */
+function cacheResponse(request, response) {
+  return caches
+    .open(CACHE_NAME)
+    .then((cache) => cache.put(request, response))
+    .then(() => trimHashedAssets())
+    .catch(() => undefined)
+}
+
+function fetchAndCache(request, event) {
   return fetch(request).then((response) => {
     if (response.ok) {
-      const copy = response.clone()
-      void caches.open(CACHE_NAME).then((cache) => cache.put(request, copy))
+      const write = cacheResponse(request, response.clone())
+      // 不 waitUntil 时，写缓存可能随 service worker 停止而中断
+      if (event) event.waitUntil(write)
     }
     return response
   })
 }
 
 /** 立即返回缓存（若有），同时后台刷新缓存 */
-function staleWhileRevalidate(request) {
-  const network = fetchAndCache(request)
+function staleWhileRevalidate(request, event) {
+  const network = fetchAndCache(request, event)
   return caches
     .match(request)
     .then((cached) => cached ?? network)
@@ -88,7 +105,9 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith(
     isHashedAsset(url)
-      ? caches.match(request).then((cached) => cached ?? fetchAndCache(request))
-      : staleWhileRevalidate(request),
+      ? caches
+          .match(request)
+          .then((cached) => cached ?? fetchAndCache(request, event))
+      : staleWhileRevalidate(request, event),
   )
 })

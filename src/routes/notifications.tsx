@@ -6,11 +6,11 @@ import { ArrowLeft, Bell } from '@phosphor-icons/react'
 
 import { Avatar } from '#/components/avatar'
 import { authClient } from '#/lib/auth-client'
-import { relativeTime } from '#/lib/date'
 import { notificationsQueryOptions, queryKeys } from '#/lib/queries'
 import { markNotificationsRead } from '#/server/notifications'
 import type { NotificationItem } from '#/server/notifications'
 import { getSessionUser } from '#/server/session'
+import { RelativeTime } from '#/components/relative-time'
 
 const ACTION_LABEL: Record<NotificationItem['type'], string> = {
   like: '赞了你的 memo',
@@ -119,7 +119,7 @@ function NotificationsPage() {
                     dateTime={item.createdAt}
                     className="mt-1.5 block font-mono text-xs text-kumo-subtle"
                   >
-                    {relativeTime(item.createdAt)}
+                    {<RelativeTime iso={item.createdAt} />}
                   </time>
                 </div>
               </article>

@@ -629,8 +629,9 @@ export async function updateMemoForUser(
   userId: string,
   id: string,
   content: string,
+  opts: { expectedUpdatedAt?: Date } = {},
 ): Promise<MemoWithTags> {
-  return patchMemoForUser(userId, id, { content })
+  return patchMemoForUser(userId, id, { content }, opts)
 }
 
 export async function patchMemoForUser(
@@ -642,6 +643,9 @@ export async function patchMemoForUser(
     pinned?: boolean
     archived?: boolean
   },
+  // 乐观并发：调用方给出编辑所基于的版本时间，不匹配即拒绝，
+  // 否则两个标签页先后保存会静默覆盖，双方都显示成功
+  opts: { expectedUpdatedAt?: Date } = {},
 ): Promise<MemoWithTags> {
   const now = new Date()
 
@@ -654,6 +658,14 @@ export async function patchMemoForUser(
       ),
     })
     if (!current) throw new AppError('memo not found')
+    if (
+      opts.expectedUpdatedAt &&
+      current.updatedAt.getTime() !== opts.expectedUpdatedAt.getTime()
+    ) {
+      throw new AppError(
+        '这条 memo 已在别处被修改，请刷新后再保存（你的编辑内容仍保留）',
+      )
+    }
     const contentChanged =
       patch.content !== undefined && patch.content !== current.content
     if (contentChanged) {

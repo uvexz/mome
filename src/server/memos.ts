@@ -94,10 +94,16 @@ export const updateMemo = createServerFn({ method: 'POST' })
     z.object({
       id: z.string().min(1),
       content: z.string().trim().min(1).max(MAX_CONTENT),
+      // 编辑所基于的版本；不传时保持旧的"后写覆盖"行为
+      expectedUpdatedAt: z.iso.datetime().optional(),
     }),
   )
   .handler(async ({ data, context }) =>
-    updateMemoForUser(context.user.id, data.id, data.content),
+    updateMemoForUser(context.user.id, data.id, data.content, {
+      expectedUpdatedAt: data.expectedUpdatedAt
+        ? new Date(data.expectedUpdatedAt)
+        : undefined,
+    }),
   )
 
 export const deleteMemo = createServerFn({ method: 'POST' })

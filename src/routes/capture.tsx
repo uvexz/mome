@@ -21,9 +21,10 @@ const captureSearchSchema = z.object({
 
 export const Route = createFileRoute('/capture')({
   validateSearch: captureSearchSchema,
-  beforeLoad: async () => {
+  beforeLoad: async ({ location }) => {
     const user = await getSessionUser()
-    if (!user) throw redirect({ to: '/login' })
+    // 带上原始分享参数：否则登录后回到首页，分享的标题/正文/链接全部丢失
+    if (!user) throw redirect({ to: '/login', search: { next: location.href } })
   },
   component: CapturePage,
 })

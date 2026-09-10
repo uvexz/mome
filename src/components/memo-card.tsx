@@ -12,6 +12,7 @@ import { useSessionUsername } from '#/lib/session-context'
 import type { MemoWithTags } from '#/server/memos'
 import type { MemoAuthor, RepostContext } from '#/server/timeline-core'
 import { relativeTime } from '#/lib/date'
+import { RelativeTime } from '#/components/relative-time'
 import { Avatar } from './avatar'
 import { HashtagText } from './hashtag-text'
 import { MemoActions } from './memo-actions'
@@ -138,7 +139,7 @@ export const MemoCard = memoize(function MemoCard({
               dateTime={repost.createdAt}
               className="font-mono text-[0.9em]"
             >
-              {relativeTime(repost.createdAt)}
+              {<RelativeTime iso={repost.createdAt} />}
             </time>
           </div>
         )}
@@ -229,7 +230,7 @@ export const MemoCard = memoize(function MemoCard({
               className="font-mono text-xs text-kumo-subtle hover:text-accent"
             >
               <time dateTime={memo.createdAt}>
-                {relativeTime(memo.createdAt)}
+                {<RelativeTime iso={memo.createdAt} />}
               </time>
             </button>
           ) : !deleted ? (
@@ -237,7 +238,7 @@ export const MemoCard = memoize(function MemoCard({
               dateTime={memo.createdAt}
               className="font-mono text-xs text-kumo-subtle"
             >
-              {relativeTime(memo.createdAt)}
+              {<RelativeTime iso={memo.createdAt} />}
             </time>
           ) : null}
           {(deleted ||

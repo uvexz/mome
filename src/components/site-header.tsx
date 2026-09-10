@@ -26,8 +26,10 @@ export function SiteHeader({ search, onSearchChange }: SiteHeaderProps) {
   const { data: config } = useQuery(appConfigQueryOptions())
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // 外部导航（如点标签）改变 q 时同步输入框
+  // 外部导航（如点标签、前进/后退）改变 q 时同步输入框；
+  // 同时作废尚未触发的防抖，否则旧输入会把新的 URL 值改回去
   useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current)
     setQ(search.q ?? '')
   }, [search.q])
 

@@ -179,6 +179,46 @@ describe('memo core', () => {
     )
   })
 
+  test('rejects an edit based on a stale version', async () => {
+    const memo = await core.createMemoForUser(OWNER_ID, '并发编辑原文')
+    const base = new Date(memo.updatedAt)
+    await core.updateMemoForUser(OWNER_ID, memo.id, '标签页 A 的编辑', {
+      expectedUpdatedAt: base,
+    })
+    await expect(
+      core.updateMemoForUser(OWNER_ID, memo.id, '标签页 B 的编辑', {
+        expectedUpdatedAt: base,
+      }),
+    ).rejects.toThrow()
+    expect((await core.getMemoForUser(OWNER_ID, memo.id)).content).toBe(
+      '标签页 A 的编辑',
+    )
+    // 不带版本时保持旧行为，导入/兼容层调用不受影响
+    await core.updateMemoForUser(OWNER_ID, memo.id, '无版本写入')
+    expect((await core.getMemoForUser(OWNER_ID, memo.id)).content).toBe(
+      '无版本写入',
+    )
+  })
+
+  test('finds short CJK queries that the trigram index cannot tokenize', async () => {
+    const memo = await core.createMemoForUser(OWNER_ID, '审计验证已编辑 audit')
+    for (const q of ['审', '审计', '审计验', 'au']) {
+      const found = await core.listMemosForUser(OWNER_ID, { q, limit: 20 })
+      expect(found.items.map((item) => item.id)).toContain(memo.id)
+    }
+    // LIKE 通配符按字面量处理，不会退化成"匹配全部"
+    for (const q of ['%', '_']) {
+      const found = await core.listMemosForUser(OWNER_ID, { q, limit: 20 })
+      expect(found.items).toHaveLength(0)
+    }
+    // 短词回退同样只在调用者可读范围内搜索
+    const others = await core.listMemosForUser(ACTOR_ID, {
+      q: '审计',
+      limit: 20,
+    })
+    expect(others.items.map((item) => item.id)).not.toContain(memo.id)
+  })
+
   test('patches every memo field in one core operation', async () => {
     const memo = await core.createMemoForUser(OWNER_ID, 'patch before #old')
     const patched = await core.patchMemoForUser(OWNER_ID, memo.id, {
