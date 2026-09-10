@@ -96,6 +96,9 @@ interface Ctx {
 
 type Handler = (ctx: Ctx) => Promise<Response>
 
+/** 批量接口一次可请求的资源名数量上限 */
+const MAX_BATCH_NAMES = 100
+
 /** 兼容层解析前的正文上限，与原生 /v1 的 MAX_BODY_BYTES 保持同一口径 */
 const MAX_COMPAT_BODY_BYTES = 1024 * 1024
 
@@ -758,6 +761,12 @@ const usersBatchGet: Handler = async ({ request }) => {
   await limitRead(actor)
   const body = await readJsonObject(request)
   const names = Array.isArray(body.names) ? body.names : []
+  if (names.length > MAX_BATCH_NAMES) {
+    throw new MemosError(
+      Code.INVALID_ARGUMENT,
+      `names 一次最多 ${MAX_BATCH_NAMES} 个`,
+    )
+  }
   const ids = names.map((name) => resourceId(name, USER_PREFIX))
   const rows =
     ids.length === 0

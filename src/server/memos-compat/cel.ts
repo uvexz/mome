@@ -854,12 +854,18 @@ class Evaluator {
   }
 }
 
+/** filter 表达式长度上限：解析前先挡住超长输入的 CPU/内存开销 */
+const MAX_FILTER_LENGTH = 2000
+
 /** 把 CEL 子集编译成 SQL 条件；表达式为空返回 null */
 export async function compileMemosFilter(
   expression: string,
 ): Promise<SQL | null> {
   const trimmed = expression.trim()
   if (!trimmed) return null
+  if (trimmed.length > MAX_FILTER_LENGTH) {
+    fail(`filter 表达式不能超过 ${MAX_FILTER_LENGTH} 个字符`)
+  }
   const node = new Parser(tokenize(trimmed)).parse()
   const value = await new Evaluator().eval(node)
   if (value.t === 'const') {
