@@ -5,6 +5,7 @@ import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 
 import { ulid } from '#/lib/ulid'
+import { IMAGE_MIME_BY_EXT } from '#/lib/upload'
 
 import { authMiddleware } from './middleware'
 import { clientIp, rateLimitOrThrow } from './rate-limit'
@@ -17,15 +18,6 @@ const MAX_BYTES: Record<(typeof IMAGE_KINDS)[number], number> = {
   avatar: 2 * 1024 * 1024,
   'memo-image': 8 * 1024 * 1024,
   'site-icon': 2 * 1024 * 1024,
-}
-
-const EXT_MIME: Record<string, string> = {
-  png: 'image/png',
-  jpg: 'image/jpeg',
-  jpeg: 'image/jpeg',
-  gif: 'image/gif',
-  webp: 'image/webp',
-  avif: 'image/avif',
 }
 
 export type UploadUrlResult =
@@ -68,7 +60,7 @@ export const getUploadUrl = createServerFn({ method: 'POST' })
       message: '上传过于频繁，请稍后再试',
     })
     const ext = data.ext.toLowerCase().replace(/^\./, '')
-    const mime = EXT_MIME[ext]
+    const mime = IMAGE_MIME_BY_EXT[ext]
     if (!mime) throw new AppError('不支持的文件类型')
     if (data.kind === 'site-icon' && !(await isAdminUser(context.user.id))) {
       throw new AppError('需要管理员权限')

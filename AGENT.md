@@ -67,6 +67,11 @@ bun run db:studio       # Drizzle Studio
 - 命名：组件文件 kebab-case，导出 PascalCase；server function camelCase
 - 提交信息简洁、祈使句，可使用中文
 
+## 特别的
+
+- 禁止 UI 单元测试，列出本次改动受影响的 UI 并给出测试 Todo list，我自行验证。
+- 不要主动 e2e 测试。
+
 ---
 
 Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.

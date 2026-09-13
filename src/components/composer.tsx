@@ -6,6 +6,7 @@ import {
   GlobeSimple,
   ImageSquare,
   LockSimple,
+  Paperclip,
 } from '@phosphor-icons/react'
 
 import { cn } from '#/lib/utils'
@@ -22,7 +23,7 @@ import {
   saveComposerDraft,
 } from '#/lib/composer-storage'
 import { MAX_CONTENT } from '#/lib/limits'
-import { assertImageSignature, uploadPresignedPost } from '#/lib/upload'
+import { resolveImageUpload, uploadPresignedPost } from '#/lib/upload'
 import { createMemo } from '#/server/memos'
 import type { MemoWithTags } from '#/server/memos'
 import { getUploadUrl } from '#/server/upload'
@@ -64,7 +65,9 @@ export function Composer({
   const [content, setContent] = useState('')
   const [visibility, setVisibility] = useState<'public' | 'private'>('private')
   const [submitting, setSubmitting] = useState(false)
-  const [uploading, setUploading] = useState(false)
+  const [fileUploading, setFileUploading] = useState(false)
+  const [pasteUploads, setPasteUploads] = useState(0)
+  const [insertedImages, setInsertedImages] = useState(0)
   const [draftStatus, setDraftStatus] = useState<
     'idle' | 'saving' | 'saved' | 'queued'
   >('idle')
@@ -80,6 +83,7 @@ export function Composer({
   contentRef.current = content
   visibilityRef.current = visibility
   const userId = session?.user.id ?? null
+  const busy = fileUploading || pasteUploads > 0
 
   useEffect(() => {
     if (!userId) return
@@ -225,7 +229,7 @@ export function Composer({
   async function submit() {
     const text = content.trim()
     if (!text || submitting) return
-    if (uploading) {
+    if (busy) {
       onError('图片上传中，请等待上传完成后再发送')
       return
     }
@@ -292,44 +296,109 @@ export function Composer({
     }
   }
 
-  function insertAtCursor(text: string) {
+  /**
+   * 在光标处插入文本。`caret` 为 null 表示"按当前光标插入"，
+   * 为数字表示粘贴那一刻记下的位置；上传期间内容被改过时由调用方传 undefined 退回末尾。
+   */
+  function insertAtCursor(text: string, caret?: number | null): number {
     const ta = document.getElementById(
       'memo-composer-input',
     ) as HTMLTextAreaElement | null
     const current = contentRef.current
     if (ta) {
-      const start = ta.selectionStart
-      const end = ta.selectionEnd
+      const start =
+        caret == null ? ta.selectionStart : Math.min(caret, current.length)
+      const end = caret == null ? ta.selectionEnd : start
       const next = current.slice(0, start) + text + current.slice(end)
+      contentRef.current = next
       setContent(next)
+      const pos = start + text.length
       requestAnimationFrame(() => {
         ta.focus()
-        const pos = start + text.length
         ta.setSelectionRange(pos, pos)
       })
-    } else {
-      setContent(current ? `${current}\n${text}` : text)
+      return pos
     }
+    const next = current ? `${current}\n${text}` : text
+    contentRef.current = next
+    setContent(next)
+    return next.length
+  }
+
+  /** 取一个预签名 URL 并上传，返回可直接插入正文的 Markdown 图片链接 */
+  async function uploadToMarkdown(file: File): Promise<string> {
+    // 剪贴板里的文件往往没有可信的文件名 / 类型，扩展名以文件头魔数为准
+    const { ext } = await resolveImageUpload(file)
+    const upload = await getUploadUrl({ data: { kind: 'memo-image', ext } })
+    if (upload.mode !== 'presigned') {
+      throw new Error('S3 未配置，图片上传不可用')
+    }
+    await uploadPresignedPost(upload, file)
+    return `![image](${upload.publicUrl})`
   }
 
   async function uploadImage(file: File | undefined) {
     if (!file) return
-    setUploading(true)
+    setFileUploading(true)
     try {
-      const ext = (file.name.split('.').pop() ?? 'jpg').toLowerCase()
-      // 服务端预签名策略只校验自报 Content-Type，字节层面的类型由这里把关
-      await assertImageSignature(file, ext)
-      const upload = await getUploadUrl({ data: { kind: 'memo-image', ext } })
-      if (upload.mode !== 'presigned') {
-        throw new Error('S3 未配置，图片上传不可用')
-      }
-      await uploadPresignedPost(upload, file)
-      insertAtCursor(`![image](${upload.publicUrl})`)
+      insertAtCursor(await uploadToMarkdown(file))
     } catch (err) {
       onError(err instanceof Error ? err.message : '图片上传失败，请重试')
     } finally {
-      setUploading(false)
+      setFileUploading(false)
       if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  /**
+   * 粘贴图片即上传：命中剪贴板文件时接管默认粘贴（否则文件名会被当正文插进输入框），
+   * 上传完成后在粘贴位置写入 Markdown 链接。
+   */
+  async function onPaste(e: React.ClipboardEvent<HTMLTextAreaElement>) {
+    // React 的合成事件类型把 clipboardData 标成非空，但旧浏览器上可能是 null
+    const clipboard = e.clipboardData as DataTransfer | null
+    const files = Array.from(clipboard?.items ?? [])
+      .filter((item) => item.kind === 'file')
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+    // 没有文件（纯文本）交给浏览器默认行为
+    if (!files.length) return
+    // 富文本选区里同时带着文字和图片（网页 / 表格）：上传图片会把同批文字丢掉，不如原样粘贴
+    const hasText = Array.from(clipboard?.items ?? []).some(
+      (item) => item.kind === 'string' && item.type === 'text/plain',
+    )
+    if (hasText) return
+    e.preventDefault()
+
+    const ta = e.currentTarget
+    // 粘贴时的插入位置，上传结束后可能已失效（见下）
+    let caret: number | null | undefined = ta.selectionStart
+    const snapshot = contentRef.current
+    const failed: string[] = []
+    setPasteUploads((n) => n + files.length)
+    try {
+      for (const file of files) {
+        // 上一个 await 期间用户可能改过正文：位置失效就交回当前光标，不写错地方
+        if (contentRef.current !== snapshot) caret = undefined
+        try {
+          const md = await uploadToMarkdown(file)
+          caret = insertAtCursor(md, caret)
+        } catch (err) {
+          failed.push(err instanceof Error ? err.message : '图片上传失败')
+        } finally {
+          setPasteUploads((n) => n - 1)
+        }
+      }
+      setInsertedImages(files.length - failed.length)
+      if (failed.length) {
+        onError(
+          failed.length === files.length
+            ? failed[0]
+            : `${failed.length} 张图片上传失败：${failed[0]}`,
+        )
+      }
+    } finally {
+      setPasteUploads(0)
     }
   }
 
@@ -350,6 +419,7 @@ export function Composer({
         placeholder="写下此刻的想法… 用 #标签 归类"
         value={content}
         onChange={(e) => setContent(e.target.value)}
+        onPaste={(e) => void onPaste(e)}
         onKeyDown={onKeyDown}
         disabled={submitting}
         className="w-full resize-none rounded-none border-none bg-transparent p-0 text-sm shadow-none ring-0 focus:ring-0"
@@ -402,28 +472,41 @@ export function Composer({
                 shape="square"
                 size="sm"
                 icon={<ImageSquare size={15} />}
-                loading={uploading}
-                disabled={uploading}
+                loading={fileUploading}
+                disabled={busy}
                 onClick={() => fileRef.current?.click()}
                 aria-label="插入图片"
-                title="插入图片"
+                title="插入图片，也可直接粘贴图片"
                 className="h-8 w-8"
               />
             </>
           )}
         </div>
         <div className="flex items-center gap-3">
-          <span className="hidden font-mono text-xs text-kumo-subtle sm:inline">
-            {draftStatus === 'saving' && '保存中'}
-            {draftStatus === 'saved' && '草稿已保存'}
-            {draftStatus === 'queued' && '已加入待发送'}
+          <span className="flex items-center gap-1 font-mono text-xs text-kumo-subtle">
+            {busy && (
+              <>
+                <Paperclip size={12} />
+                上传中…
+              </>
+            )}
+            {!busy && (
+              <span className="hidden sm:inline">
+                {draftStatus === 'saving' && '保存中'}
+                {draftStatus === 'saved' && '草稿已保存'}
+                {draftStatus === 'queued' && '已加入待发送'}
+              </span>
+            )}
+          </span>
+          <span className="sr-only" aria-live="polite">
+            {insertedImages > 0 && !busy && `${insertedImages} 张图片已上传`}
           </span>
           <Button
             size="sm"
             variant="primary"
             icon={<ArrowUpRight size={14} />}
             loading={submitting}
-            disabled={!content.trim() || uploading}
+            disabled={!content.trim() || busy}
             onClick={() => void submit()}
             className="h-8"
           >
