@@ -47,6 +47,7 @@ import { z } from 'zod'
 
 import { Avatar } from '#/components/avatar'
 import { uploadPresignedPost } from '#/lib/upload'
+import { useStableCallback } from '#/lib/use-stable-callback'
 import { compactNumber } from '#/lib/utils'
 import {
   adminGateQueryOptions,
@@ -109,12 +110,15 @@ function AdminPage() {
 function AccessDenied() {
   const navigate = useNavigate()
   const toast = useKumoToastManager()
+  // kumo 的 toast 管理器每次渲染都返回新对象，不能直接进依赖数组：
+  // add → toasts 变化 → 重渲染 → effect 再次执行，会无限循环。
+  const addToast = useStableCallback(toast.add)
 
   useEffect(() => {
-    toast.add({ title: '需要管理员权限', variant: 'error' })
+    addToast({ title: '需要管理员权限', variant: 'error' })
     const timer = setTimeout(() => void navigate({ to: '/' }), 1600)
     return () => clearTimeout(timer)
-  }, [navigate, toast])
+  }, [addToast, navigate])
 
   return (
     <main className="mx-auto flex min-h-dvh w-full max-w-[640px] flex-col items-center justify-center gap-4 px-4 text-center">
@@ -400,7 +404,10 @@ function AdminShell({ overview }: { overview: AdminOverview }) {
         </Sidebar.Footer>
       </Sidebar>
 
-      <div className="flex min-w-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
+      {/* relative：让滚动容器成为 main 内绝对定位元素（如 kumo SensitiveInput 的
+          sr-only 播报节点）的包含块，否则它们会逃出滚动容器、把文档撑高，
+          出现页面级与容器级两条滚动条。 */}
+      <div className="relative flex min-w-0 flex-1 flex-col overflow-y-auto [scrollbar-gutter:stable]">
         <main className="mx-auto w-full max-w-[960px] px-4 pb-16 pt-8 lg:px-8">
           <div className="mb-6 flex items-center md:hidden">
             <Sidebar.Trigger aria-label="打开导航" />
@@ -504,7 +511,7 @@ function Section({
     <LayerCard className="grid gap-6 px-5 py-4 text-sm">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid gap-1.5">
-          <Text as="h2" variant="heading3">
+          <Text as="h2" variant="heading">
             {title}
           </Text>
           {description && (
@@ -536,7 +543,7 @@ function OverviewSection({
   return (
     <div className="grid gap-8">
       <div className="grid gap-1.5">
-        <Text as="h2" variant="heading3">
+        <Text as="h2" variant="heading">
           总览
         </Text>
         <Text variant="secondary" size="sm">

@@ -525,7 +525,7 @@ function Section({
   return (
     <LayerCard className="grid gap-6 px-5 py-4 text-sm">
       <div className="grid gap-1.5">
-        <Text as="h2" variant="heading3">
+        <Text as="h2" variant="heading">
           {title}
         </Text>
         {description && (

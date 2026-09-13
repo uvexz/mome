@@ -109,11 +109,15 @@ function Home() {
     void feed.fetchNextPage()
   }, [feed.fetchNextPage])
 
+  // kumo 的 toast 管理器每次渲染都返回新对象，不能直接进依赖数组：
+  // add → toasts 变化 → 重渲染 → effect 再次执行，会无限循环。
+  const addToast = useStableCallback(toast.add)
+
   useEffect(() => {
     if (feed.isError) {
-      toast.add({ title: '加载失败', variant: 'error' })
+      addToast({ title: '加载失败', variant: 'error' })
     }
-  }, [feed.errorUpdatedAt, feed.isError, toast])
+  }, [addToast, feed.errorUpdatedAt, feed.isError])
 
   function refreshMetadata() {
     for (const queryKey of [
