@@ -1,5 +1,12 @@
 {
   "include": ["**/*.ts", "**/*.tsx", "eslint.config.js", "prettier.config.js"],
+  /* docs/ 下的上游克隆是参考资料，依赖未安装，不参与本仓库的类型检查 */
+  "exclude": [
+    "node_modules",
+    "docs/web-clipper",
+    "docs/memoflow",
+    "docs/MoeMemos"
+  ],
 
   "compilerOptions": {
     "target": "ES2022",

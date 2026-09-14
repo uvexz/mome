@@ -66,6 +66,41 @@ function memoBody(content: string, extra: Record<string, unknown> = {}) {
   return { content, ...extra }
 }
 
+/**
+ * 还原被临时覆盖的 S3 环境变量。
+ * 直接赋 undefined 会被写成字符串 "undefined"，反而让 S3 看起来是配置好的。
+ */
+function restoreEnv(snapshot: NodeJS.ProcessEnv, keys: string[]): void {
+  for (const key of keys) {
+    const previous = snapshot[key]
+    if (previous === undefined) delete process.env[key]
+    else process.env[key] = previous
+  }
+}
+
+/** 起一个本地 stub S3 并把连接参数指向它；调用方负责在 finally 里 stop + restoreEnv */
+function stubS3(
+  onRequest: (request: Request) => Response | Promise<Response>,
+): { server: ReturnType<typeof Bun.serve>; env: NodeJS.ProcessEnv } {
+  const server = Bun.serve({ port: 0, fetch: onRequest })
+  const env = { ...process.env }
+  process.env.S3_ENDPOINT = `http://127.0.0.1:${server.port}`
+  process.env.S3_BUCKET = 'mome-test'
+  process.env.S3_ACCESS_KEY_ID = 'test-key'
+  process.env.S3_SECRET_ACCESS_KEY = 'test-secret'
+  process.env.S3_FORCE_PATH_STYLE = 'true'
+  return { server, env }
+}
+
+const S3_ENV_KEYS = [
+  'S3_ENDPOINT',
+  'S3_BUCKET',
+  'S3_ACCESS_KEY_ID',
+  'S3_SECRET_ACCESS_KEY',
+  'S3_PUBLIC_URL',
+  'S3_FORCE_PATH_STYLE',
+]
+
 beforeAll(async () => {
   const client = createClient({ url: process.env.DATABASE_URL! })
   await migrate(drizzle(client), {
@@ -337,6 +372,20 @@ describe('memos compat memo CRUD', () => {
     })
     expect(duplicate.status).toBe(409)
     expect(duplicate.body.code).toBe(6)
+  })
+
+  test('accepts a clipper-shaped memoId, long content and exposes uid', async () => {
+    // web-clipper 的回退 ID 与整页文章剪藏都超出 Mome 原生的 id/正文口径
+    const longContent = 'x'.repeat(6000)
+    const created = await call(
+      'POST',
+      '/api/v1/memos?memoId=legacy_1731000000000_abc123',
+      { token: ownerToken, body: memoBody(longContent) },
+    )
+    expect(created.status).toBe(200)
+    expect(created.body.name).toBe('memos/legacy_1731000000000_abc123')
+    expect(created.body.uid).toBe('legacy_1731000000000_abc123')
+    expect((created.body.content as string).length).toBe(6000)
   })
 
   test('isolates private memos between users and exposes public ones', async () => {
@@ -765,12 +814,387 @@ describe('memos compat pagination', () => {
   })
 })
 
+describe('memos compat attachments', () => {
+  const pngBytes = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+  ])
+
+  /** 与实现同一形状的资源名：`attachments/` + 对象 key 的 base64url */
+  function attachmentName(userId: string, ext = 'png'): string {
+    const key = `mome/memo-image/${userId}/01J0000000000000000000000.${ext}`
+    return `attachments/${Buffer.from(key, 'utf8').toString('base64url')}`
+  }
+
+  test('uploads an attachment to the configured bucket and references it from a memo', async () => {
+    // loadS3Settings 支持环境变量回落，用本地 stub 顶替 S3：只验证请求形状，不打真实网络
+    const puts: Array<{
+      path: string
+      body: string
+      contentType: string | null
+    }> = []
+    const { server, env } = stubS3(async (request) => {
+      puts.push({
+        path: new URL(request.url).pathname,
+        body: Buffer.from(await request.arrayBuffer()).toString('base64'),
+        contentType: request.headers.get('content-type'),
+      })
+      return new Response(null, { status: 200, headers: { ETag: '"stub"' } })
+    })
+    process.env.S3_PUBLIC_URL = 'https://cdn.example.com/'
+
+    try {
+      const uploaded = await call('POST', '/api/v1/attachments', {
+        token: ownerToken,
+        body: {
+          filename: 'clip.png',
+          type: 'image/png',
+          content: Buffer.from(pngBytes).toString('base64'),
+        },
+      })
+      expect(uploaded.status).toBe(200)
+      const name = uploaded.body.name as string
+      expect(name.startsWith('attachments/')).toBe(true)
+      expect(uploaded.body.type).toBe('image/png')
+      expect(uploaded.body.size).toBe(String(pngBytes.byteLength))
+
+      expect(puts).toHaveLength(1)
+      expect(puts[0].contentType).toBe('image/png')
+      expect(puts[0].body).toBe(Buffer.from(pngBytes).toString('base64'))
+      expect(puts[0].path).toMatch(
+        /^\/mome-test\/mome\/memo-image\/compat-owner\/[0-9A-HJKMNP-TV-Z]{26}\.png$/,
+      )
+      const key = puts[0].path.replace('/mome-test/', '')
+
+      // MoeMemos 等客户端优先用 externalLink 取图；缺了它就会回退拼
+      // `{host}/file/{name}/{filename}`，而本服务没有该路由，附件只能 404。
+      expect(uploaded.body.externalLink).toBe(`https://cdn.example.com/${key}`)
+      expect(Number.isNaN(Date.parse(String(uploaded.body.createTime)))).toBe(
+        false,
+      )
+
+      const created = await call('POST', '/api/v1/memos', {
+        token: ownerToken,
+        body: memoBody('clipped page', { attachments: [{ name }] }),
+      })
+      expect(created.status).toBe(200)
+      expect(created.body.content).toBe(
+        `clipped page\n\n![image](https://cdn.example.com/${key})`,
+      )
+      // 正文里的图片 URL 与 externalLink 必须是同一个，客户端两条取图路径才能一致
+      expect(created.body.content).toContain(
+        uploaded.body.externalLink as string,
+      )
+    } finally {
+      server.stop(true)
+      restoreEnv(env, S3_ENV_KEYS)
+    }
+  })
+
+  test('requires credentials', async () => {
+    const res = await call('POST', '/api/v1/attachments', {
+      body: { filename: 'a.png', type: 'image/png', content: 'AA==' },
+    })
+    expect(res.status).toBe(401)
+    expect(res.body.code).toBe(16)
+  })
+
+  test('rejects non-image bytes and malformed base64', async () => {
+    const notImage = await call('POST', '/api/v1/attachments', {
+      token: ownerToken,
+      body: {
+        filename: 'note.txt',
+        type: 'text/plain',
+        content: Buffer.from('just text').toString('base64'),
+      },
+    })
+    expect(notImage.status).toBe(400)
+    expect(notImage.body.code).toBe(3)
+
+    const badBase64 = await call('POST', '/api/v1/attachments', {
+      token: ownerToken,
+      body: { filename: 'a.png', type: 'image/png', content: 'not base64!' },
+    })
+    expect(badBase64.status).toBe(400)
+    expect(badBase64.body.code).toBe(3)
+  })
+
+  test('reports FAILED_PRECONDITION when S3 is not configured', async () => {
+    const res = await call('POST', '/api/v1/attachments', {
+      token: ownerToken,
+      body: {
+        filename: 'clip.png',
+        type: 'image/png',
+        content: Buffer.from(pngBytes).toString('base64'),
+      },
+    })
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe(9)
+    expect(String(res.body.message)).toContain('S3')
+  })
+
+  test('rejects attachment references that are malformed, foreign or unsupported', async () => {
+    const malformed = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody('broken attachment', {
+        attachments: [{ name: 'not-a-resource' }],
+      }),
+    })
+    expect(malformed.status).toBe(400)
+    expect(malformed.body.code).toBe(3)
+
+    const foreign = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody('foreign attachment', {
+        attachments: [{ name: attachmentName(OTHER_ID) }],
+      }),
+    })
+    expect(foreign.status).toBe(403)
+    expect(foreign.body.code).toBe(7)
+
+    const unsupported = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody('unsupported attachment', {
+        attachments: [{ name: attachmentName(OWNER_ID, 'svg') }],
+      }),
+    })
+    expect(unsupported.status).toBe(400)
+    expect(unsupported.body.code).toBe(3)
+  })
+
+  test('fails the whole create when a referenced attachment cannot be resolved', async () => {
+    const content = 'attachment without storage'
+    const res = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody(content, {
+        attachments: [{ name: attachmentName(OWNER_ID) }],
+      }),
+    })
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe(9)
+    // 不伪成功：拒绝的请求不能留下半条 memo
+    const list = await call('GET', '/api/v1/memos?pageSize=100', {
+      token: ownerToken,
+    })
+    expect(
+      (list.body.memos as Array<Record<string, unknown>>).some(
+        (item) => item.content === content,
+      ),
+    ).toBe(false)
+  })
+
+  /** 裸附件 id（资源名尾段）——DeleteAttachment 的路径参数形态 */
+  function attachmentToken(userId: string, ext = 'png'): string {
+    return attachmentName(userId, ext).slice('attachments/'.length)
+  }
+
+  test('deletes the S3 object for an attachment id', async () => {
+    const requests: string[] = []
+    const { server, env } = stubS3((request) => {
+      requests.push(`${request.method} ${new URL(request.url).pathname}`)
+      return new Response(null, { status: 204 })
+    })
+
+    try {
+      const res = await call(
+        'DELETE',
+        `/api/v1/attachments/${attachmentToken(OWNER_ID)}`,
+        { token: ownerToken },
+      )
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({})
+      expect(requests).toEqual([
+        `DELETE /mome-test/mome/memo-image/${OWNER_ID}/01J0000000000000000000000.png`,
+      ])
+    } finally {
+      server.stop(true)
+      restoreEnv(env, S3_ENV_KEYS)
+    }
+  })
+
+  test('rejects attachment deletes that are unauthenticated, foreign or malformed', async () => {
+    const anonymous = await call(
+      'DELETE',
+      `/api/v1/attachments/${attachmentToken(OWNER_ID)}`,
+    )
+    expect(anonymous.status).toBe(401)
+    expect(anonymous.body.code).toBe(16)
+
+    // 归属校验先于任何 S3 访问：即使没配 S3 也必须先拒绝别人的附件
+    const foreign = await call(
+      'DELETE',
+      `/api/v1/attachments/${attachmentToken(OTHER_ID)}`,
+      { token: ownerToken },
+    )
+    expect(foreign.status).toBe(403)
+    expect(foreign.body.code).toBe(7)
+
+    const malformed = await call('DELETE', '/api/v1/attachments/not-a-key', {
+      token: ownerToken,
+    })
+    expect(malformed.status).toBe(400)
+    expect(malformed.body.code).toBe(3)
+
+    const unsupported = await call(
+      'DELETE',
+      `/api/v1/attachments/${attachmentToken(OWNER_ID, 'svg')}`,
+      { token: ownerToken },
+    )
+    expect(unsupported.status).toBe(400)
+    expect(unsupported.body.code).toBe(3)
+  })
+
+  test('reports FAILED_PRECONDITION when deleting without configured storage', async () => {
+    const res = await call(
+      'DELETE',
+      `/api/v1/attachments/${attachmentToken(OWNER_ID)}`,
+      { token: ownerToken },
+    )
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe(9)
+    expect(String(res.body.message)).toContain('S3')
+  })
+})
+
+describe('memos compat user settings', () => {
+  test('serves the GENERAL setting MoeMemos reads right after login', async () => {
+    const res = await call(
+      'GET',
+      `/api/v1/users/${OWNER_ID}/settings/GENERAL`,
+      { token: ownerToken },
+    )
+    expect(res.status).toBe(200)
+    expect(res.body.name).toBe(`users/${OWNER_ID}/settings/GENERAL`)
+    expect(res.body.generalSetting).toEqual({ memoVisibility: 'PRIVATE' })
+  })
+
+  test('reflects the site-level default visibility', async () => {
+    const { db: database, schema } = mods
+    const key = 'default_visibility'
+    await database
+      .delete(schema.siteSettings)
+      .where(eq(schema.siteSettings.key, key))
+    await database
+      .insert(schema.siteSettings)
+      .values({ key, value: 'public', updatedAt: new Date() })
+
+    try {
+      for (const path of [
+        `/api/v1/users/${OWNER_ID}/settings/GENERAL`,
+        `/api/v1/users/${OWNER_ID}/settings`,
+      ]) {
+        const res = await call('GET', path, { token: ownerToken })
+        expect(res.status).toBe(200)
+        const setting = path.endsWith('GENERAL')
+          ? res.body
+          : (res.body.settings as Array<Record<string, unknown>>)[0]
+        expect(
+          (setting.generalSetting as Record<string, unknown>).memoVisibility,
+        ).toBe('PUBLIC')
+      }
+    } finally {
+      await database
+        .delete(schema.siteSettings)
+        .where(eq(schema.siteSettings.key, key))
+    }
+  })
+
+  test('lists settings in the shape the proto declares', async () => {
+    const res = await call('GET', `/api/v1/users/${OWNER_ID}/settings`, {
+      token: ownerToken,
+    })
+    expect(res.status).toBe(200)
+    const settings = res.body.settings as Array<Record<string, unknown>>
+    expect(settings).toHaveLength(1)
+    expect(settings[0].name).toBe(`users/${OWNER_ID}/settings/GENERAL`)
+    expect(res.body.nextPageToken).toBe('')
+  })
+
+  test('rejects unauthenticated, foreign and unknown settings', async () => {
+    const anonymous = await call(
+      'GET',
+      `/api/v1/users/${OWNER_ID}/settings/GENERAL`,
+    )
+    expect(anonymous.status).toBe(401)
+    expect(anonymous.body.code).toBe(16)
+
+    // OTHER_ID 不是管理员：读别人的设置必须被拒
+    const foreign = await call(
+      'GET',
+      `/api/v1/users/${OWNER_ID}/settings/GENERAL`,
+      { token: otherToken },
+    )
+    expect(foreign.status).toBe(403)
+    expect(foreign.body.code).toBe(7)
+
+    const unknown = await call(
+      'GET',
+      `/api/v1/users/${OWNER_ID}/settings/NOPE`,
+      { token: ownerToken },
+    )
+    expect(unknown.status).toBe(404)
+    expect(unknown.body.code).toBe(5)
+
+    const missingUser = await call(
+      'GET',
+      '/api/v1/users/no-such-user/settings/GENERAL',
+      { token: ownerToken },
+    )
+    expect(missingUser.status).toBe(404)
+  })
+
+  test('lets an admin read another users settings but not invent setting ids', async () => {
+    // OWNER_ID 在 beforeAll 里被标成管理员：跨用户读取放行
+    const asAdmin = await call(
+      'GET',
+      `/api/v1/users/${OTHER_ID}/settings/GENERAL`,
+      { token: ownerToken },
+    )
+    expect(asAdmin.status).toBe(200)
+    expect(asAdmin.body.name).toBe(`users/${OTHER_ID}/settings/GENERAL`)
+
+    // 但"设置名必须存在"这条对管理员同样成立
+    const adminUnknown = await call(
+      'GET',
+      `/api/v1/users/${OTHER_ID}/settings/NOPE`,
+      { token: ownerToken },
+    )
+    expect(adminUnknown.status).toBe(404)
+    expect(adminUnknown.body.code).toBe(5)
+  })
+})
+
+describe('memos compat permalink alias', () => {
+  test('resolves public memos for everyone, private ones only for the author', async () => {
+    const { getMemoPermalink } = await import('../public-core')
+    const priv = await call('POST', '/api/v1/memos', {
+      token: otherToken,
+      body: memoBody('permalink private'),
+    })
+    const pub = await call('POST', '/api/v1/memos', {
+      token: otherToken,
+      body: memoBody('permalink public', { visibility: 'PUBLIC' }),
+    })
+    const privId = (priv.body.name as string).slice('memos/'.length)
+    const pubId = (pub.body.name as string).slice('memos/'.length)
+
+    expect(await getMemoPermalink(pubId)).toEqual({ username: 'compatother' })
+    expect(await getMemoPermalink(privId)).toBeNull()
+    expect(await getMemoPermalink(privId, OTHER_ID)).toEqual({
+      username: 'compatother',
+    })
+    expect(await getMemoPermalink('permalink-missing')).toBeNull()
+
+    await call('DELETE', `/api/v1/memos/${pubId}`, { token: otherToken })
+    expect(await getMemoPermalink(pubId)).toBeNull()
+  })
+})
+
 describe('memos compat unimplemented surface', () => {
-  test('returns UNIMPLEMENTED for attachments and shares', async () => {
+  test('returns UNIMPLEMENTED for the attachment and share surface that has no Mome model', async () => {
     for (const [method, path] of [
       ['GET', '/api/v1/attachments'],
-      ['POST', '/api/v1/attachments'],
       ['GET', '/api/v1/memos/abc/attachments'],
+      ['PATCH', '/api/v1/memos/abc/attachments'],
       ['GET', '/api/v1/memos/abc/shares'],
       ['GET', '/api/v1/memos/abc/shares/xyz'],
       ['GET', '/api/v1/shares/xyz/memo'],

@@ -1,14 +1,18 @@
-import { S3Client } from '@aws-sdk/client-s3'
 import { AppError } from './error-shield'
 import { createPresignedPost } from '@aws-sdk/s3-presigned-post'
 import { createServerFn } from '@tanstack/react-start'
 import { z } from 'zod'
 
-import { ulid } from '#/lib/ulid'
 import { IMAGE_MIME_BY_EXT } from '#/lib/upload'
 
 import { authMiddleware } from './middleware'
 import { clientIp, rateLimitOrThrow } from './rate-limit'
+import {
+  MEMO_IMAGE_MAX_BYTES,
+  createS3Client,
+  s3ObjectPublicUrl,
+  uploadObjectKey,
+} from './s3'
 import { isAdminUser, loadS3Settings } from './settings-core'
 
 const IMAGE_KINDS = ['avatar', 'memo-image', 'site-icon'] as const
@@ -16,7 +20,7 @@ const IMAGE_KINDS = ['avatar', 'memo-image', 'site-icon'] as const
 /** 各类型的上传上限（字节），写入预签名 POST 策略强制约束 */
 const MAX_BYTES: Record<(typeof IMAGE_KINDS)[number], number> = {
   avatar: 2 * 1024 * 1024,
-  'memo-image': 8 * 1024 * 1024,
+  'memo-image': MEMO_IMAGE_MAX_BYTES,
   'site-icon': 2 * 1024 * 1024,
 }
 
@@ -71,16 +75,8 @@ export const getUploadUrl = createServerFn({ method: 'POST' })
       throw new AppError('S3 未配置，图片上传不可用')
     }
 
-    const client = new S3Client({
-      endpoint: s3.endpoint,
-      region: s3.region,
-      credentials: {
-        accessKeyId: s3.accessKeyId,
-        secretAccessKey: s3.secretAccessKey,
-      },
-      forcePathStyle: s3.forcePathStyle,
-    })
-    const key = `mome/${data.kind}/${context.user.id}/${ulid()}.${ext}`
+    const client = createS3Client(s3)
+    const key = uploadObjectKey(data.kind, context.user.id, ext)
     const maxBytes = MAX_BYTES[data.kind]
     // 预签名 POST：大小 / Content-Type / key 前缀均写入策略，S3 侧强制校验；
     // Content-Disposition: attachment 让对象被直接访问时以下载而非渲染方式返回，
@@ -100,12 +96,12 @@ export const getUploadUrl = createServerFn({ method: 'POST' })
         'Content-Disposition': 'attachment',
       },
     })
-    const base = s3.publicUrl || `${s3.endpoint}/${s3.bucket}`
+    const publicUrl = s3ObjectPublicUrl(s3, key)
     return {
       mode: 'presigned',
       url,
       fields,
-      publicUrl: `${base.replace(/\/$/, '')}/${key}`,
+      publicUrl,
       key,
       maxBytes,
     }

@@ -5,8 +5,8 @@
  * `/api/v1/memos`、`/api/v1/memos/{memo}`、`/api/v1/auth/*`、`/api/v1/users/*`、
  * `/api/v1/instance/profile` 等，错误体为 google.rpc.Status。
  *
- * 未实现的资源（附件、分享、webhook、通知、IDP、AI、instance settings）返回
- * UNIMPLEMENTED(12)，不做伪成功。
+ * 未实现的资源（附件列表/重命名、分享、webhook、通知、IDP、AI、instance settings）
+ * 返回 UNIMPLEMENTED(12)，不做伪成功。
  */
 import { and, asc, desc, eq, inArray, isNull } from 'drizzle-orm'
 
@@ -21,7 +21,6 @@ import {
 } from '#/db/schema'
 import type { memoComments } from '#/db/schema'
 import { auth } from '#/lib/auth'
-import { MAX_CONTENT } from '#/lib/limits'
 import { createApiKeyForUser, revokeApiKeyForUser } from '../api-keys-core'
 import { isPasswordLoginBlocked } from '../auth-policy'
 import {
@@ -36,7 +35,14 @@ import {
   setPinForUser,
 } from '../memos-core'
 import { clientIp, rateLimitOrThrow } from '../rate-limit'
-import { isAdminUser } from '../settings-core'
+import { isAdminUser, loadSiteSettings } from '../settings-core'
+import { MEMO_IMAGE_MAX_BYTES } from '../s3'
+import {
+  attachmentImageMarkdown,
+  assertAttachmentQuota,
+  createAttachmentForUser,
+  deleteAttachmentForUser,
+} from './attachments'
 import {
   authenticate,
   clearRefreshCookie,
@@ -102,11 +108,28 @@ const MAX_BATCH_NAMES = 100
 /** 兼容层解析前的正文上限，与原生 /v1 的 MAX_BODY_BYTES 保持同一口径 */
 const MAX_COMPAT_BODY_BYTES = 1024 * 1024
 
-async function readBodyText(request: Request): Promise<string> {
+/**
+ * 附件上传的正文上限：一张图片（{@link MEMO_IMAGE_MAX_BYTES}）的 base64 展开
+ * 再加 JSON 包装。图片字节在 base64 之前就按上限校验，这里只是读取护栏。
+ */
+const MAX_COMPAT_ATTACHMENT_BODY_BYTES =
+  Math.ceil((MEMO_IMAGE_MAX_BYTES * 4) / 3) + 64 * 1024
+
+/**
+ * 兼容层的正文上限比 Mome 原生的 MAX_CONTENT(5000) 宽：浏览器扩展会把整页文章
+ * 压成一条 memo，5000 字会让大量真实剪藏直接失败。放宽只作用于 REST 兼容面，
+ * 代价是这类超长 memo 回 Mome 编辑器保存时需要先裁剪。
+ */
+const MAX_COMPAT_CONTENT = 20_000
+
+async function readBodyText(
+  request: Request,
+  maxBytes = MAX_COMPAT_BODY_BYTES,
+): Promise<string> {
   const declared = request.headers.get('content-length')
   if (declared) {
     const size = Number(declared)
-    if (!Number.isFinite(size) || size > MAX_COMPAT_BODY_BYTES) {
+    if (!Number.isFinite(size) || size > maxBytes) {
       throw new MemosError(Code.INVALID_ARGUMENT, '请求体过大')
     }
   }
@@ -119,7 +142,7 @@ async function readBodyText(request: Request): Promise<string> {
     const { done, value } = await reader.read()
     if (done) break
     total += value.byteLength
-    if (total > MAX_COMPAT_BODY_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel().catch(() => undefined)
       throw new MemosError(Code.INVALID_ARGUMENT, '请求体过大')
     }
@@ -130,8 +153,9 @@ async function readBodyText(request: Request): Promise<string> {
 
 async function readJsonObject(
   request: Request,
+  maxBytes = MAX_COMPAT_BODY_BYTES,
 ): Promise<Record<string, unknown>> {
-  const text = await readBodyText(request)
+  const text = await readBodyText(request, maxBytes)
   if (!text.trim()) return {}
   try {
     const parsed: unknown = JSON.parse(text)
@@ -169,10 +193,10 @@ function requireVisibility(value: unknown): 'public' | 'private' | undefined {
 }
 
 function checkContentLength(content: string): void {
-  if (content.length > MAX_CONTENT) {
+  if (content.length > MAX_COMPAT_CONTENT) {
     throw new MemosError(
       Code.INVALID_ARGUMENT,
-      `content 不能超过 ${MAX_CONTENT} 个字符`,
+      `content 不能超过 ${MAX_COMPAT_CONTENT} 个字符`,
     )
   }
 }
@@ -370,7 +394,11 @@ const authSignout: Handler = async ({ request }) => {
 }
 
 // ── memos ───────────────────────────────────────────────
-const MEMO_ID_PATTERN = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,34}[a-zA-Z0-9])?$/
+/**
+ * 客户端自带 memoId 的形状：首尾字母数字、总长 ≤36 的 `[A-Za-z0-9_-]`。
+ * 下划线是 web-clipper 的 `legacy_*` / `clip_*` 回退 ID 形态，上游接受，这里也放行。
+ */
+const MEMO_ID_PATTERN = /^[a-zA-Z0-9]([a-zA-Z0-9_-]{0,34}[a-zA-Z0-9])?$/
 
 const memosList: Handler = async ({ request, url }) => {
   const actor = await authenticate(request)
@@ -401,16 +429,22 @@ const memosCreate: Handler = async ({ request, url }) => {
   await limitWrite(actor)
   const body = await readJsonObject(request)
   const memo = (body.memo ?? body) as Record<string, unknown>
-  const content = requireString(memo.content, 'content')
-  if (!content.trim()) {
+  const rawContent = requireString(memo.content, 'content')
+  if (!rawContent.trim()) {
     throw new MemosError(Code.INVALID_ARGUMENT, 'content 不能为空')
   }
+  // Mome 没有附件表：附件引用落成正文末尾的 Markdown 图片
+  const images = await attachmentImageMarkdown(actor.id, memo.attachments)
+  const content =
+    images.length > 0
+      ? `${rawContent.trimEnd()}\n\n${images.join('\n')}`
+      : rawContent
   checkContentLength(content)
   const memoId = url.searchParams.get('memoId')?.trim()
   if (memoId && !MEMO_ID_PATTERN.test(memoId)) {
     throw new MemosError(
       Code.INVALID_ARGUMENT,
-      'memoId 需匹配 ^[a-zA-Z0-9]([a-zA-Z0-9-]{0,34}[a-zA-Z0-9])?$',
+      'memoId 需匹配 ^[a-zA-Z0-9]([a-zA-Z0-9_-]{0,34}[a-zA-Z0-9])?$',
     )
   }
   if (memoId) {
@@ -709,6 +743,30 @@ const relationsSet: Handler = async ({ request, params }) => {
   return memosJson({})
 }
 
+// ── attachments ─────────────────────────────────────────
+/**
+ * 上游 CreateAttachment：JSON 里带 base64 图片字节，返回 `attachments/{id}` 资源名。
+ * Mome 侧字节直接写入 S3（与编辑器上传同一套逻辑），资源名在 CreateMemo 里解回。
+ */
+const attachmentsCreate: Handler = async ({ request }) => {
+  const actor = await requireActor(request)
+  // 先限流再读大 body：被配额拦下的请求不进入 MB 级 base64 解析
+  await assertAttachmentQuota(actor.id)
+  const body = await readJsonObject(request, MAX_COMPAT_ATTACHMENT_BODY_BYTES)
+  return memosJson(await createAttachmentForUser(actor.id, body))
+}
+
+/**
+ * 路径参数是附件 id（资源名尾段），不是完整资源名——客户端取
+ * `attachments/{id}` 的最后一段。删除幂等，重复调用不报错。
+ */
+const attachmentsDelete: Handler = async ({ request, params }) => {
+  const actor = await requireActor(request)
+  await limitWrite(actor)
+  await deleteAttachmentForUser(actor.id, params.attachment)
+  return memosJson({})
+}
+
 // ── users ───────────────────────────────────────────────
 function usernameFilter(filter: string | null): string | undefined {
   if (!filter) return undefined
@@ -883,6 +941,62 @@ const patDelete: Handler = async ({ request, params }) => {
   return memosJson({})
 }
 
+// ── user settings ───────────────────────────────────────
+/**
+ * Mome 没有每用户设置表：默认可见性是站点级的
+ * （`site_settings.default_visibility`，见 `#/server/settings-core`），
+ * 语言与主题也不是用户级配置。
+ *
+ * 这里只填 GENERAL 里能填的字段：proto3 JSON 省略字段等价于「未设置」，
+ * 客户端会退回自己的默认值，所以 locale / theme 不编造。
+ */
+function generalUserSetting(
+  userId: string,
+  site: { defaultVisibility: 'public' | 'private' },
+): Record<string, unknown> {
+  return {
+    name: `${USER_PREFIX}/${userId}/settings/GENERAL`,
+    generalSetting: {
+      memoVisibility:
+        site.defaultVisibility === 'public' ? 'PUBLIC' : 'PRIVATE',
+    },
+  }
+}
+
+/** 设置与其他用户类端点同口径：只放本人与管理员 */
+async function requireSettingsAccess(
+  actor: CompatActor,
+  userId: string,
+): Promise<void> {
+  await loadUserRow(userId)
+  if (userId !== actor.id && !actor.isAdmin) {
+    throw new MemosError(Code.PERMISSION_DENIED, '只能查看自己的设置')
+  }
+}
+
+const userSettingsList: Handler = async ({ request, params }) => {
+  const actor = await requireActor(request)
+  await limitRead(actor)
+  const userId = params.user
+  await requireSettingsAccess(actor, userId)
+  return memosJson({
+    settings: [generalUserSetting(userId, await loadSiteSettings())],
+    nextPageToken: '',
+  })
+}
+
+const userSettingGet: Handler = async ({ request, params }) => {
+  const actor = await requireActor(request)
+  await limitRead(actor)
+  const userId = params.user
+  await requireSettingsAccess(actor, userId)
+  // 设置名是 proto 枚举名；只认 GENERAL，其余按不存在处理而不是返回空对象
+  if (params.setting.toUpperCase() !== 'GENERAL') {
+    throw new MemosError(Code.NOT_FOUND, `设置 ${params.setting} 不存在`)
+  }
+  return memosJson(generalUserSetting(userId, await loadSiteSettings()))
+}
+
 // ── instance ────────────────────────────────────────────
 const instanceProfile: Handler = async () => {
   const adminRow = (
@@ -977,16 +1091,30 @@ const ROUTES: Route[] = [
     pattern: ['users', ':user', 'personalAccessTokens', ':personalAccessToken'],
     handler: patDelete,
   },
+  {
+    method: 'GET',
+    pattern: ['users', ':user', 'settings'],
+    handler: userSettingsList,
+  },
+  {
+    method: 'GET',
+    pattern: ['users', ':user', 'settings', ':setting'],
+    handler: userSettingGet,
+  },
   { method: 'GET', pattern: ['instance', 'profile'], handler: instanceProfile },
+  { method: 'POST', pattern: ['attachments'], handler: attachmentsCreate },
+  {
+    method: 'DELETE',
+    pattern: ['attachments', ':attachment'],
+    handler: attachmentsDelete,
+  },
 ]
 
 const UNIMPLEMENTED: Array<{ method: string; pattern: string[] }> = [
   { method: 'GET', pattern: ['attachments'] },
-  { method: 'POST', pattern: ['attachments'] },
   { method: 'POST', pattern: ['attachments:batchDelete'] },
   { method: 'GET', pattern: ['attachments', ':attachment'] },
   { method: 'PATCH', pattern: ['attachments', ':attachment'] },
-  { method: 'DELETE', pattern: ['attachments', ':attachment'] },
   { method: 'GET', pattern: ['memos', ':memo', 'attachments'] },
   { method: 'PATCH', pattern: ['memos', ':memo', 'attachments'] },
   { method: 'GET', pattern: ['memos', ':memo', 'shares'] },
@@ -996,7 +1124,6 @@ const UNIMPLEMENTED: Array<{ method: string; pattern: string[] }> = [
   { method: 'GET', pattern: ['memos', '-', 'linkMetadata'] },
   { method: 'POST', pattern: ['memos', '-', 'linkMetadata:batchGet'] },
   { method: 'GET', pattern: ['users:stats'] },
-  { method: 'GET', pattern: ['users', ':user', 'settings'] },
   { method: 'GET', pattern: ['users', ':user', 'webhooks'] },
   { method: 'GET', pattern: ['users', ':user', 'notifications'] },
   { method: 'GET', pattern: ['users', ':user', 'linkedIdentities'] },

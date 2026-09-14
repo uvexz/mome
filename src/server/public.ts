@@ -6,6 +6,7 @@ import {
   getPublicMemoDetail,
   getPublicProfileByUsername,
   listPublicFeed,
+  getMemoPermalink,
 } from './public-core'
 import { getSessionUserFromRequest } from './session-core'
 
@@ -52,6 +53,10 @@ export const getPublicMemo = createServerFn({ method: 'GET' })
   .handler(async ({ data }) =>
     getPublicMemoDetail(data.username, data.memoId, await viewerId()),
   )
+
+export const resolveMemoPermalink = createServerFn({ method: 'GET' })
+  .validator(z.object({ memoId: z.string().min(1).max(64) }))
+  .handler(async ({ data }) => getMemoPermalink(data.memoId, await viewerId()))
 
 export const listPublicTimeline = createServerFn({ method: 'GET' })
   .validator(

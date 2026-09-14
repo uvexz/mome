@@ -10,7 +10,7 @@
     "generate-routes": "tsr generate",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "bun test",
+    "test": "bun test ./src",
     "lint": "eslint",
     "format": "prettier --write . && eslint --fix",
     "check": "prettier --check .",

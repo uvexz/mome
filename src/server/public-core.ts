@@ -363,6 +363,27 @@ export async function getPublicMemoDetail(
   }
 }
 
+/**
+ * 永久链接解析：Memos 兼容面只暴露 `memos/{id}`，第三方客户端（如 web-clipper）
+ * 会拼 `${instanceUrl}/memos/{id}`。这里把 id 换成 Mome 的 `/@{username}/{id}`，
+ * 可读性判定与 `getPublicMemoDetail` 一致：非公开/已归档只对作者放行。
+ */
+export async function getMemoPermalink(
+  memoId: string,
+  viewerId: string | null = null,
+): Promise<{ username: string } | null> {
+  const memo = await db.query.memos.findFirst({ where: eq(memos.id, memoId) })
+  if (!memo || memo.deletedAt) return null
+  const author = await db.query.user.findFirst({
+    where: eq(user.id, memo.userId),
+    columns: { username: true },
+  })
+  if (!author) return null
+  const isAuthor = viewerId !== null && viewerId === memo.userId
+  if ((memo.visibility !== 'public' || memo.archived) && !isAuthor) return null
+  return { username: author.username }
+}
+
 /** 公共主页：聚合所有用户的公开 memo（倒序，keyset 分页） */
 export async function listAllPublicMemos(
   opts: {

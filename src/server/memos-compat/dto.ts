@@ -104,6 +104,8 @@ export function memoJson(input: MemoJsonInput): Record<string, unknown> {
   const property = memoProperty(row.content)
   const json: Record<string, unknown> = {
     name: memoName(row.id),
+    // 上游 name = `memos/{uid}`：Mome 只有这一个 ID，两者同值（web-clipper 等客户端优先取 uid）
+    uid: row.id,
     state: stateToJson(row.archived),
     creator: userName(row.userId),
     createTime: row.createdAt.toISOString(),
