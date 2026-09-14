@@ -70,6 +70,7 @@ import {
   encodePageToken,
   parseFieldMask,
   parseTimestamp,
+  protoTimestamp,
   resourceId,
 } from './json'
 import {
@@ -202,11 +203,26 @@ function checkContentLength(content: string): void {
 }
 
 /**
- * cookie 凭据（浏览器会话 / refresh cookie）驱动的写操作必须来自可信 Origin：
+ * cookie 凭据（浏览器会话）驱动的写操作必须来自可信 Origin：
  * SameSite=Lax 不阻止同站不同源页面发出的简单请求。
- * Bearer 客户端不带 cookie，也常常不带 Origin，这里不受影响。
+ *
+ * 例外：带 `Authorization` 的请求只按该凭据鉴权——`authenticate()` 命中 Bearer 后
+ * 不会回落到 cookie session，令牌无效就直接 401，所以它不构成 CSRF 载体。
+ * 浏览器扩展正是这种形态：用 PAT 鉴权，却会带上目标站点的 cookie（扩展的 host
+ * permission 请求不受页面同源策略约束，浏览器会把 cookie jar 一并附上），
+ * 此前被这条检查误伤成 403，症状是"连接成功但发不出内容"。
  */
 function assertTrustedOriginForCookieWrite(request: Request): void {
+  if (request.headers.get('authorization')) return
+  requireTrustedOrigin(request)
+}
+
+/**
+ * 只认 cookie 的端点（`refresh` / `signout` 直接读 `memos_refresh`）必须无条件校验来源：
+ * 它们不走 `authenticate()`，加一个 Authorization 头也改变不了鉴权方式，
+ * 不能借上面的例外伪造退出 / 轮换。
+ */
+function requireTrustedOrigin(request: Request): void {
   const method = request.method.toUpperCase()
   if (method === 'GET' || method === 'HEAD') return
   if (!request.headers.get('cookie')) return
@@ -350,7 +366,7 @@ const authSignin: Handler = async ({ request }) => {
         includeEmail: true,
       }),
       accessToken: access.accessToken,
-      accessTokenExpiresAt: access.expiresAt.toISOString(),
+      accessTokenExpiresAt: protoTimestamp(access.expiresAt),
     },
     {
       headers: {
@@ -361,6 +377,8 @@ const authSignin: Handler = async ({ request }) => {
 }
 
 const authRefresh: Handler = async ({ request }) => {
+  // 只认 refresh cookie：来源校验不能因为带了 Authorization 头而放宽
+  requireTrustedOrigin(request)
   const token = readRefreshCookie(request)
   const userId = token ? await consumeRefreshToken(token) : null
   if (!userId) {
@@ -375,7 +393,7 @@ const authRefresh: Handler = async ({ request }) => {
   return memosJson(
     {
       accessToken: access.accessToken,
-      expiresAt: access.expiresAt.toISOString(),
+      expiresAt: protoTimestamp(access.expiresAt),
     },
     {
       headers: {
@@ -386,6 +404,8 @@ const authRefresh: Handler = async ({ request }) => {
 }
 
 const authSignout: Handler = async ({ request }) => {
+  // 只认 refresh cookie：来源校验不能因为带了 Authorization 头而放宽
+  requireTrustedOrigin(request)
   // 退出必须让服务端 refresh 记录失效，仅清 cookie 挡不住已被复制的凭据
   const token = readRefreshCookie(request)
   const userId = token ? refreshTokenSubject(token) : null
@@ -869,7 +889,7 @@ const userStats: Handler = async ({ request, params }) => {
     tagCount: stats.tagCount,
     totalMemoCount: stats.total,
     memoCreatedTimestamps: stats.createdTimestamps.map((date) =>
-      date.toISOString(),
+      protoTimestamp(date),
     ),
     pinnedMemos: stats.pinnedMemos,
   })

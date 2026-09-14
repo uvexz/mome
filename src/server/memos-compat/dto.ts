@@ -9,7 +9,7 @@
  */
 import { resolveAvatarUrl } from '#/lib/avatar'
 import type { apiKeys, memoComments, memos, user } from '#/db/schema'
-import { memoProperty, snippet } from './json'
+import { memoProperty, protoTimestamp, snippet } from './json'
 
 type UserRow = typeof user.$inferSelect
 type MemoRow = typeof memos.$inferSelect
@@ -70,8 +70,8 @@ export function userJson(
     displayName: row.name,
     avatarUrl: resolveAvatarUrl(row.image, row.username),
     state: 'NORMAL',
-    createTime: row.createdAt.toISOString(),
-    updateTime: row.updatedAt.toISOString(),
+    createTime: protoTimestamp(row.createdAt),
+    updateTime: protoTimestamp(row.updatedAt),
   }
   if (opts.includeEmail && row.email) json.email = row.email
   if (row.bio) json.description = row.bio
@@ -108,8 +108,8 @@ export function memoJson(input: MemoJsonInput): Record<string, unknown> {
     uid: row.id,
     state: stateToJson(row.archived),
     creator: userName(row.userId),
-    createTime: row.createdAt.toISOString(),
-    updateTime: row.updatedAt.toISOString(),
+    createTime: protoTimestamp(row.createdAt),
+    updateTime: protoTimestamp(row.updatedAt),
     content: row.content,
     visibility: visibilityToJson(row.visibility),
     pinned: row.pinned,
@@ -168,7 +168,7 @@ export function reactionJson(
     name: `${memoName(memoId)}/reactions/${userId}`,
     creator: userName(userId),
     reactionType: '👍',
-    createTime: createdAt.toISOString(),
+    createTime: protoTimestamp(createdAt),
   }
 }
 
@@ -190,10 +190,10 @@ export function personalAccessTokenJson(
 ): Record<string, unknown> {
   const json: Record<string, unknown> = {
     name: `${userName(userId)}/personalAccessTokens/${row.id}`,
-    createdAt: row.createdAt.toISOString(),
+    createdAt: protoTimestamp(row.createdAt),
   }
   if (row.name) json.description = row.name
-  if (row.expiresAt) json.expiresAt = row.expiresAt.toISOString()
-  if (row.lastUsedAt) json.lastUsedAt = row.lastUsedAt.toISOString()
+  if (row.expiresAt) json.expiresAt = protoTimestamp(row.expiresAt)
+  if (row.lastUsedAt) json.lastUsedAt = protoTimestamp(row.lastUsedAt)
   return json
 }

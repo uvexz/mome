@@ -35,6 +35,14 @@ Better Auth 是应用层身份事实源；Memos 兼容层在其上做凭据 faca
 access/refresh token 不是上游 JWT 的字节级 parity（issuer 为 `mome`、密钥独立派生），
 只保证客户端可用。token 无服务端吊销列表：signout 只清 cookie，PAT 可单独撤销。
 
+**写操作的来源校验**：带 cookie 的写请求必须来自可信 Origin（`BETTER_AUTH_URL`，
+非生产环境额外放行 localhost）——SameSite=Lax 挡不住同站不同源页面发出的简单请求。
+带 `Authorization` 的请求不走这条检查：`authenticate()` 命中 Bearer 后不会回落到
+cookie session，令牌无效直接 401，因此不构成 CSRF 载体。浏览器扩展（web-clipper 等）
+用 PAT 发请求时会一并带上目标站点的 cookie，正是这种形态。
+`POST /api/v1/auth/refresh` 与 `signout` 只认 `memos_refresh` cookie，无条件要求可信
+Origin——加一个 Authorization 头不会放宽它们。
+
 ## REST 矩阵
 
 | 能力                           | 路径                                                                           | 状态     | 备注                                                                                                                                                                                                        |
@@ -88,6 +96,22 @@ size(content) > 100           has_link / has_task_list / has_code / has_incomple
 | 客户端自带 memoId | 服务端生成 ULID           | `[A-Za-z0-9_-]`，总长 ≤36            | web-clipper 的回退 ID 形如 `legacy_1726…_ab12` / `clip_…`，含下划线；上游接受这类 ID。                                     |
 | 附件单图          | ≤8MB，每人 30/时 + 100/日 | 同一上限与配额（另加全站 IP 300/时） | 上游 `CreateAttachment` 是 JSON base64，字节由服务端代传，其余（魔数校验、key、公开 URL）沿用原生逻辑。                    |
 
+### 时间戳格式：必须不带小数秒
+
+兼容层对外的时间戳一律走 `protoTimestamp()`（`src/server/memos-compat/json.ts`），
+输出 `YYYY-MM-DDTHH:MM:SSZ`。**不要用 `Date.prototype.toISOString()`**：
+它带 3 位小数秒，而 swift-openapi-runtime 的默认 `dateTranscoder` 是 `.iso8601`
+（`ISO8601DateTranscoder()`，formatter 沿用 Foundation 默认的
+`.withInternetDateTime`，不含 `.withFractionalSeconds`），解析带小数秒的字符串会
+返回 nil 并抛 `DecodingError.dataCorrupted`，导致**整条响应**在客户端解码失败，
+症状是 `Client encountered an error invoking the operation "…"`。
+
+上游 Go 服务的 protojson 在秒的小数位为 0 时裁掉小数部分，Memos 自身也是秒精度，
+所以这里按秒截断既兼容又与上游一致。入参方向的 `parseTimestamp()` 仍然宽容，
+接受带小数秒的 RFC3339。
+
+回归防护见 `memos-compat.test.ts` 的 `memos compat protojson timestamps`。
+
 ### 附件与正文的关系
 
 Mome 没有 attachments 表：`POST /api/v1/attachments` 把图片写进 S3，
@@ -138,8 +162,9 @@ SSE（`/api/v1/sse`）、MCP、webhook 投递、AI transcription、多用户协�
 
 ## 已对接客户端：usememos/web-clipper
 
-参考克隆在 `docs/web-clipper/`（不参与本仓库的 typecheck / lint / test）。
-它用 **Direct connection + PAT**（`memos_pat_…` 或 `mome_…`）连接，请求面固定为：
+对接对象是扩展商店里的 usememos/web-clipper（曾用本地克隆 `docs/web-clipper/` 逐端点
+核对契约，克隆已移除）。它用 **Direct connection + PAT**（`memos_pat_…` 或 `mome_…`）连接，
+请求面固定为：
 
 | 客户端调用                                               | 兼容层行为                                                        |
 | -------------------------------------------------------- | ----------------------------------------------------------------- |
@@ -149,6 +174,16 @@ SSE（`/api/v1/sse`）、MCP、webhook 投递、AI transcription、多用户协�
 | `GET /api/v1/memos?pageSize=20&orderBy=create_time desc` | POST 响应丢失后的对账                                             |
 | `POST /api/v1/attachments`                               | 图片上传，需要 S3 已配置                                          |
 | `${instanceUrl}/memos/{id}`（浏览器打开）                | 由 `/memos/$memoId` 重定向到 `/@{username}/{id}`                  |
+
+### 已修复：保存一律 403
+
+扩展的 `fetch` 会带上目标站点的 cookie，而 Origin 是 `chrome-extension://…`。
+兼容层原先对所有"带 cookie 的非 GET 请求"强制可信 Origin，于是保存
+（`POST /memos`、`POST /attachments`）全部返回 403
+`cookie 鉴权的写操作必须来自可信 Origin`，而连接探测（`GET /instance/profile`、
+`GET /auth/me`）正常——症状正是"能保存实例地址与 token，但发布不了内容"。
+见"认证边界"的写操作来源校验：带 Bearer 的请求跳过该检查，cookie-only 的
+refresh/signout 仍严格校验。回归用例：`memos compat cookie write origin guard`。
 
 已知边界（客户端侧行为，服务端不做特殊适配）：
 
@@ -178,17 +213,20 @@ SSE（`/api/v1/sse`）、MCP、webhook 投递、AI transcription、多用户协�
 参考克隆在 `docs/MoeMemos/`（iOS 客户端，声明支持 Memos 0.27.0–0.30.0）。
 逐端点矩阵、问题清单与修复记录见
 [`docs/moememos-compatibility.md`](./moememos-compatibility.md)。摘要：版本探测与
-PAT 鉴权可用；`settings/GENERAL` 曾让登录**必定失败**（客户端该调用没有 `try?`），
-已修复；`CreateAttachment` 缺 `externalLink`、附件删除 501 也一并修掉。
+PAT 鉴权可用；真正让登录失败的是**时间戳带毫秒**（P0-2）——客户端默认的 ISO8601 解码器不接受
+小数秒，整条响应报废；`settings/GENERAL` 曾返回 501 是第二道坎（该调用没有 `try?`）。
+两条都已修复，`CreateAttachment` 缺 `externalLink`、附件删除 501 也一并修掉。
 
 ## 仓库测试证据
 
-- `src/server/memos-compat/memos-compat.test.ts`：41 个用例覆盖鉴权（PAT/JWT/cookie、
-  登录失败）、memo CRUD 与 `memoId`/`createTime`/`uid`、长正文、跨用户可见性隔离、
+- `src/server/memos-compat/memos-compat.test.ts`：51 个用例覆盖鉴权（PAT/JWT/cookie、
+  登录失败）、写操作的 cookie 来源校验（Bearer 豁免与 cookie-only 端点）、memo CRUD 与
+  `memoId`/`createTime`/`uid`、长正文、跨用户可见性隔离、
   CEL 子集与非法 filter/orderBy、分页游标、评论、反应、关系、附件上传与删除（含本地
   stub S3 的完整 PUT/DELETE 形状与正文引用）与引用校验、用户设置（`GENERAL` 与站点级
-  默认可见性）、永久链接解析、用户与邮箱可见性、PAT 生命周期、实例信息、未实现端点与 CORS。
-- 2026-09-14 本地 `bun run test`：78 个用例（6 个文件）全绿；`bun run typecheck`、
+  默认可见性）、protojson 时间戳（递归扫描真实响应，禁止小数秒）、永久链接解析、
+  用户与邮箱可见性、PAT 生命周期、实例信息、未实现端点与 CORS。
+- 2026-09-14 本地 `bun run test`：84 个用例（6 个文件）全绿；`bun run typecheck`、
   `bun run lint`、`bun run check` 无告警。
 - 2026-09-08 本地 `bun dev` + 真实 SQLite 的 HTTP smoke：匿名/鉴权读、创建/更新/评论/
   反应/PAT/统计/删除、`OPTIONS` 预检全部按预期返回（脚本用完即删，未留数据）。

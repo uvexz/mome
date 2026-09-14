@@ -364,7 +364,14 @@ describe('memos compat memo CRUD', () => {
     })
     expect(created.status).toBe(200)
     expect(created.body.name).toBe('memos/my-memo-id')
-    expect(created.body.createTime).toBe('2024-01-01T00:00:00.000Z')
+    // 入参接受带小数秒的 RFC3339（宽容解析），回显走 protojson 形态：
+    // 秒精度、Z 结尾。带毫秒会让 swift-openapi-runtime 的默认日期解码器
+    // 抛错并报废整条响应，见 `memos compat protojson timestamps`。
+    expect(created.body.createTime).toBe('2024-01-01T00:00:00Z')
+    // 时刻本身没被改变，只是去掉了小数位
+    expect(Date.parse(created.body.createTime as string)).toBe(
+      Date.parse('2024-01-01T00:00:00.000Z'),
+    )
 
     const duplicate = await call('POST', '/api/v1/memos?memoId=my-memo-id', {
       token: ownerToken,
@@ -1163,6 +1170,77 @@ describe('memos compat user settings', () => {
   })
 })
 
+describe('memos compat protojson timestamps', () => {
+  /**
+   * swift-openapi-runtime 的默认 `dateTranscoder` 是 `.iso8601`，即用 Foundation
+   * 默认 `.withInternetDateTime`（不含 `.withFractionalSeconds`）的
+   * `ISO8601DateFormatter`。带毫秒的 `toISOString()` 会让它在
+   * `InstanceProfile.admin.createTime` 上解码失败，**整条响应**报废，客户端只报
+   * `Client encountered an error invoking the operation "…"`。
+   * 所以这里把真实响应里的时间戳全扫一遍。
+   */
+  const RFC3339_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/
+  const PROTOJSON_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/
+
+  function collectTimestamps(value: unknown, out: string[] = []): string[] {
+    if (typeof value === 'string') {
+      if (RFC3339_PREFIX.test(value)) out.push(value)
+    } else if (Array.isArray(value)) {
+      for (const item of value) collectTimestamps(item, out)
+    } else if (value && typeof value === 'object') {
+      for (const item of Object.values(value)) collectTimestamps(item, out)
+    }
+    return out
+  }
+
+  test('never emits fractional seconds on any surface', async () => {
+    const created = await call('POST', '/api/v1/memos', {
+      token: ownerToken,
+      body: memoBody('timestamp probe'),
+    })
+    const memoId = (created.body.name as string).slice('memos/'.length)
+
+    // 客户端在登录前就会打 instance/profile，它是最先撞上该缺陷的地方
+    const responses = [
+      await call('GET', '/api/v1/instance/profile'),
+      await call('GET', '/api/v1/auth/me', { token: ownerToken }),
+      await call('GET', '/api/v1/memos?pageSize=5', { token: ownerToken }),
+      await call('GET', `/api/v1/memos/${memoId}`, { token: ownerToken }),
+      await call('GET', `/api/v1/users/${OWNER_ID}`, { token: ownerToken }),
+      await call('GET', `/api/v1/users/${OWNER_ID}:getStats`, {
+        token: ownerToken,
+      }),
+      await call('GET', `/api/v1/users/${OWNER_ID}/personalAccessTokens`, {
+        token: ownerToken,
+      }),
+      created,
+    ]
+
+    const seen: string[] = []
+    for (const res of responses) {
+      expect(res.status).toBe(200)
+      const stamps = collectTimestamps(res.body)
+      // 每个面上的时间戳都不能被静默漏掉，否则这个测试会假装通过
+      expect(stamps.length).toBeGreaterThan(0)
+      for (const stamp of stamps) {
+        expect(stamp).toMatch(PROTOJSON_TIMESTAMP)
+        seen.push(stamp)
+      }
+    }
+    expect(seen.length).toBeGreaterThan(0)
+  })
+
+  test('truncates to whole seconds instead of dropping the value', async () => {
+    const res = await call('GET', '/api/v1/instance/profile')
+    const admin = res.body.admin as Record<string, unknown>
+    const createTime = admin.createTime as string
+    expect(createTime).toMatch(PROTOJSON_TIMESTAMP)
+    // 截断到秒，但仍是一个可解析的真实时刻
+    expect(new Date(createTime).getTime() % 1000).toBe(0)
+    expect(Number.isNaN(Date.parse(createTime))).toBe(false)
+  })
+})
+
 describe('memos compat permalink alias', () => {
   test('resolves public memos for everyone, private ones only for the author', async () => {
     const { getMemoPermalink } = await import('../public-core')
@@ -1212,6 +1290,65 @@ describe('memos compat unimplemented surface', () => {
     const options = await call('OPTIONS', '/api/v1/memos')
     expect(options.status).toBe(204)
     expect(options.headers.get('access-control-allow-origin')).toBe('*')
+  })
+})
+
+describe('memos compat cookie write origin guard', () => {
+  // 扩展（chrome-extension:// / moz-extension://）用 PAT 发请求时仍会带上目标站点的
+  // cookie，Origin 也不是实例自身——此前这里把 web-clipper 的保存全部误判成 403。
+  const extensionOrigin = 'chrome-extension://nebaoebnljalfegiidibihhkebeiklbl'
+
+  test('lets a Bearer client write even when the browser also sends cookies', async () => {
+    // 复现 web-clipper 的保存请求：扩展 origin + 站点 cookie + `?memoId=<uuid>`
+    const memoId = '4cca3c7d-0900-41db-9d0a-a1dc7382a37a'
+    const res = await call('POST', `/api/v1/memos?memoId=${memoId}`, {
+      token: ownerToken,
+      headers: {
+        cookie: 'better-auth.session_token=fake; memos_refresh=fake',
+        origin: extensionOrigin,
+      },
+      body: memoBody('clipper write with cookies'),
+    })
+    expect(res.status).toBe(200)
+    expect(res.body.name).toBe(`memos/${memoId}`)
+    expect(res.body.content).toBe('clipper write with cookies')
+  })
+
+  test('ignores an invalid Bearer token instead of falling back to the cookie session', async () => {
+    const res = await call('POST', '/api/v1/memos', {
+      token: 'mome_not-a-real-token',
+      headers: { cookie: 'better-auth.session_token=fake' },
+      body: memoBody('cookie must not authenticate this'),
+    })
+    expect(res.status).toBe(401)
+    expect(res.body.code).toBe(16)
+  })
+
+  test('still rejects cookie-authenticated writes from untrusted origins', async () => {
+    const res = await call('POST', '/api/v1/memos', {
+      headers: {
+        cookie: 'better-auth.session_token=fake',
+        origin: 'https://evil.example.com',
+      },
+      body: memoBody('csrf attempt'),
+    })
+    expect(res.status).toBe(403)
+    expect(res.body.code).toBe(7)
+  })
+
+  test('keeps the strict check on the cookie-only refresh and signout endpoints', async () => {
+    for (const path of ['/api/v1/auth/refresh', '/api/v1/auth/signout']) {
+      const res = await call('POST', path, {
+        headers: {
+          cookie: 'memos_refresh=fake',
+          origin: 'https://evil.example.com',
+          // 即使带了 Authorization，也只认 refresh cookie：来源必须可信
+          authorization: 'Bearer whatever',
+        },
+      })
+      expect(res.status).toBe(403)
+      expect(res.body.code).toBe(7)
+    }
   })
 })
 

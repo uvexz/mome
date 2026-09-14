@@ -12,8 +12,10 @@
 
 ## 结论摘要
 
-> **修复状态（2026-09-14 更新）**：P0-1 / P1-1 / P1-2 已实现并加了契约测试，见
-> [第八节 修复记录](#八修复记录)。本节以下内容保留为**修复前**的实测快照。
+> **修复状态（2026-09-14 更新）**：P0-1 / **P0-2** / P1-1 / P1-2 已实现并加了契约测试，
+> 见[第八节 修复记录](#八修复记录)。本节以下内容保留为**修复前**的实测快照。
+>
+> **P0-2 是用户实测报错后补查出来的**，第一版审计漏了它——见下方 P0-2 一节。
 
 **修复前 MoeMemos 连不上 Mome：登录必定失败。**
 
@@ -31,8 +33,8 @@
 
 | 能力                                  | 修复前                                               | 证据        |
 | ------------------------------------- | ---------------------------------------------------- | ----------- |
-| 版本探测（自动选 V1）                 | 可用                                                 | 实测        |
-| PAT 登录（host + access token）       | **不可用**：`settings/GENERAL` 501（P0-1）→ 已修复   | 实测        |
+| 版本探测（自动选 V1）                 | 路由可用，但响应解码失败（P0-2）→ 已修复             | 实测        |
+| PAT 登录（host + access token）       | **不可用**：P0-2 解码失败 + P0-1 501 → 均已修复      | 实测        |
 | memo 列表 / 详情 / 新建 / 删除        | 可用                                                 | 实测        |
 | memo 编辑（正文 / 可见性 / 置顶）     | 可用                                                 | 实测        |
 | memo 归档 / 恢复                      | 可用                                                 | 实测        |
@@ -203,6 +205,65 @@ const userSettingGet: Handler = async ({ request, params }) => {
 并把 `UNIMPLEMENTED` 里的 `['users', ':user', 'settings']` 换成同样实现
 （`ListUserSettings` 返回 `{settings:[…], nextPageToken: ''}`，
 schema 见 `docs/MoeMemos/.../openapi.yaml:1028-1037`；顺带解决 memoflow 报告里的同类问题）。
+
+### P0-2 时间戳带毫秒 → 客户端整条响应解码失败（**实际把登录打死的就是这条**）
+
+> **已修复**（见[第八节](#八修复记录)）。这条是第一版审计**漏掉**的：当时只核对了字段
+> 是否存在、类型是否是 string，没有把响应真的喂给客户端用的解码器。用户实测报错后补查。
+
+**用户报错原文**
+
+```
+Client encountered an error invoking the operation
+"InstanceService_GetInstanceProfile", caused by "Unknown", underlying error:
+未能读取数据，因为它的格式不正确。
+```
+
+**根因链（逐环都已验证）**
+
+1. 报错文案出自 swift-openapi-runtime 的 `ClientError.errorDescription`
+   （`Sources/OpenAPIRuntime/Errors/ClientError.swift:134`）。
+2. `caused by "Unknown"` 只在 `UniversalClient.swift:118-124` 出现，条件是
+   **错误不是 `RuntimeError`**。所以这不是 Content-Type 不匹配、也不是状态码问题，
+   而是一个裸的解码错误。
+3. `underlying error: 数据格式不正确` 是 `DecodingError.dataCorrupted` 桥接成
+   `NSCocoaErrorDomain` 后的文案。
+4. 该 `DecodingError` 的确切来源是 `ISO8601DateTranscoder.decode`
+   （`Sources/OpenAPIRuntime/Conversion/Configuration.swift:64-70`）：
+   `ISO8601DateFormatter.date(from:)` 返回 nil 就抛 `dataCorrupted`。
+5. 而 MoeMemos 用的是默认配置（`MemosV1Service.swift:29-36` 只传
+   `serverURL/transport/middlewares`，没有自定义 `Configuration`），
+   默认 `dateTranscoder` 是 `.iso8601`，即 `ISO8601DateTranscoder()`，
+   它的 formatter **沿用 Foundation 默认的 `.withInternetDateTime`，不含
+   `.withFractionalSeconds`**。
+6. Mome 之前用 `Date.prototype.toISOString()` 输出 `2026-08-08T12:39:43.541Z`，
+   带着 3 位小数秒 → formatter 直接返回 nil。
+
+**本机实测（Swift 6.4 + Foundation，直接复刻 runtime 的 formatter 配置）**
+
+```
+default formatOptions: 1907                 (.withInternetDateTime)
+  .withFractionalSeconds = 2048             (不在默认值里)
+2026-08-08T12:39:43.541Z -> nil  <-- FAILS   ← Mome 当时输出
+2026-08-08T12:39:43Z     -> 2026-08-08 12:39:43 +0000   ← 上游 memos 输出
+localizedDescription = "The data couldn't be read because it isn't in the correct format."
+```
+
+最后一行与用户看到的中文文案逐字对应。
+
+**为什么偏偏炸在 `InstanceService_GetInstanceProfile`**：`InstanceProfile` 里唯一的
+非字符串字段就是 `admin`（`User`）的 `createTime` / `updateTime`。而它在**版本探测**
+阶段就被调用——登录之前，所以用户感知为"登录报错"。`auth/me`、`ListMemos` 等所有带
+时间戳的响应都会同样炸。
+
+**为什么上游 memos 没事**：Go 的 protojson 在秒的小数位为 0 时会裁掉小数部分，
+而 memos 的时间戳本身就是秒精度，所以客户端只在 Mome 上炸。
+
+**修复**：新增 `protoTimestamp()`（`src/server/memos-compat/json.ts`），统一输出
+protojson 形态 `YYYY-MM-DDTHH:MM:SSZ`，并把兼容层里**全部** 13 处
+`toISOString()` 换成它（`dto.ts` 8 处、`handlers.ts` 3 处、`attachments.ts` 1 处、
+`auth.ts` 1 处）。**任何新增的对外时间戳都必须走这个函数**，
+`memos compat protojson timestamps` 测试会递归扫描真实响应，防止回归。
 
 ### P1-1 CreateAttachment 响应缺 `externalLink`，客户端拼出本服务不存在的 URL
 
@@ -378,6 +439,7 @@ P1-3 的反查有了稳定的 URL 前缀。
 
 | 顺序  | 动作                                                                       | 影响                        | 成本 |
 | ----- | -------------------------------------------------------------------------- | --------------------------- | ---- |
+| ~~0~~ | ~~时间戳去掉小数秒（P0-2）~~ **已完成**                                    | 解除登录阻断（真正的那条）  | 极低 |
 | ~~1~~ | ~~实现 `GET …/settings/{setting}`（P0-1）~~ **已完成**                     | 解除登录阻断，MoeMemos 可用 | 低   |
 | ~~2~~ | ~~`CreateAttachment` 补 `externalLink` / `createTime`（P1-1）~~ **已完成** | 附件能真正显示              | 极低 |
 | ~~3~~ | ~~实现 `DELETE /api/v1/attachments/{attachment}`（P1-2）~~ **已完成**      | 停止永久重试 + 回收对象     | 低   |
@@ -409,11 +471,12 @@ MoeMemos 的真实请求面**（没有 `settings/{setting}`、没有附件删除
 
 ## 八、修复记录
 
-| 编号 | 改动                                                                                                                                                                                         | 位置                                                     |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| P0-1 | 新增 `GET /api/v1/users/{user}/settings` 与 `GET …/settings/{setting}`，`GENERAL` 的 `memoVisibility` 取站点级 `default_visibility`；其他 setting id 返回 `NOT_FOUND(5)`；ACL 为本人或管理员 | `src/server/memos-compat/handlers.ts`                    |
-| P1-1 | `CreateAttachment` 响应补 `externalLink`（对象公开地址）与 `createTime`                                                                                                                      | `src/server/memos-compat/attachments.ts`                 |
-| P1-2 | 新增 `DELETE /api/v1/attachments/{attachment}`：资源名尾段解回对象 key、校验归属后删 S3 对象，幂等                                                                                           | `src/server/memos-compat/attachments.ts` + `handlers.ts` |
+| 编号     | 改动                                                                                                                                                                                         | 位置                                                                |
+| -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| **P0-2** | 新增 `protoTimestamp()`，兼容层全部 13 处 `toISOString()` 改为输出 protojson 形态（**秒精度、无小数秒**）                                                                                    | `json.ts` + `dto.ts` / `handlers.ts` / `attachments.ts` / `auth.ts` |
+| P0-1     | 新增 `GET /api/v1/users/{user}/settings` 与 `GET …/settings/{setting}`，`GENERAL` 的 `memoVisibility` 取站点级 `default_visibility`；其他 setting id 返回 `NOT_FOUND(5)`；ACL 为本人或管理员 | `src/server/memos-compat/handlers.ts`                               |
+| P1-1     | `CreateAttachment` 响应补 `externalLink`（对象公开地址）与 `createTime`                                                                                                                      | `src/server/memos-compat/attachments.ts`                            |
+| P1-2     | 新增 `DELETE /api/v1/attachments/{attachment}`：资源名尾段解回对象 key、校验归属后删 S3 对象，幂等                                                                                           | `src/server/memos-compat/attachments.ts` + `handlers.ts`            |
 
 配套：把附件 id → 对象 key 的解析抽成 `attachmentObjectKeyFromToken`，让
 `CreateMemo`（完整资源名）与 `DeleteAttachment`（裸 id）走同一套形状与归属校验，
@@ -433,6 +496,17 @@ HTTP 200  DELETE /api/v1/attachments/{id}   {}
           S3 收到 DELETE /verify-bucket/mome/memo-image/verify-owner/01M2FZ…png   ← 同一个 key
 ```
 
+P0-2 的验证是把**真实 dev server 的响应**（`curl /api/v1/instance/profile` 与
+`/api/v1/memos`）里所有 RFC3339 字符串抽出来，逐个喂给复刻 runtime 配置的
+`ISO8601DateFormatter`：
+
+```
+2026-08-08T12:39:43Z  OK     ← 修复前这里是 2026-08-08T12:39:43.541Z -> nil
+2026-08-14T12:40:07Z  OK
+…（14/14 全部 OK）
+RESULT: all timestamps decode -> client will succeed
+```
+
 负向用例同样实测：无凭据删除 → `401(16)`；删别人的附件 → `403(7)`；
 畸形 id → `400(3)`；未配 S3 删除 → `400(9)`；未知 setting → `404(5)`；
 非管理员读他人设置 → `403(7)`，管理员可读他人设置但未知 setting 仍 `404(5)`。
@@ -440,7 +514,14 @@ HTTP 200  DELETE /api/v1/attachments/{id}   {}
 **仍未修复**（本文档其他章节仍按其"修复前"描述理解）：P1-3、P1-4、P1-5、P1-6 与全部 P2。
 其中 **P1-4（给已有 memo 加图静默丢失）是剩下的最高优先级**，它是数据丢失而非显示问题。
 
-契约测试现状：`src/server/memos-compat/memos-compat.test.ts` 41 个用例
-（全仓 78 个），新增覆盖 `settings`（含站点级默认可见性的两个分支）、
-`CreateAttachment` 的 `externalLink`/`createTime` 与正文一致性、附件删除的正负路径。
+契约测试现状：`src/server/memos-compat/memos-compat.test.ts` 43 个用例
+（全仓 80 个），新增覆盖 `settings`（含站点级默认可见性的两个分支）、
+`CreateAttachment` 的 `externalLink`/`createTime` 与正文一致性、附件删除的正负路径、
+以及 `protojson timestamps`（递归扫描 8 个端点的真实响应，断言时间戳一律
+`YYYY-MM-DDTHH:MM:SSZ`、不含小数秒）。
 `bun run test` / `bun run typecheck` / `bun run lint` / `bun run check` 全绿。
+
+**教训**：第一版审计漏掉 P0-2，是因为验证停在"字段存在且类型是 string"，
+没有把响应真的喂给客户端所用的解码器；契约测试也一样，它断言的是我们自己写的期望值。
+对协议兼容这类问题，**按调用方的运行时（这里是 swift-openapi-runtime 的默认
+`Configuration`）复刻一次解码**才算有效证据。

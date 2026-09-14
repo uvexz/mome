@@ -21,6 +21,7 @@ import {
 } from '../s3'
 import { loadS3Settings } from '../settings-core'
 import { ATTACHMENT_PREFIX } from './dto'
+import { protoTimestamp } from './json'
 import { Code, MemosError } from './errors'
 
 /** 单条 memo 可引用的附件数上限：web-clipper 一次最多上传 10 张图片 */
@@ -218,7 +219,7 @@ export async function createAttachmentForUser(
 
   return {
     name: attachmentResourceName(key),
-    createTime: new Date().toISOString(),
+    createTime: protoTimestamp(new Date()),
     filename,
     type: mime,
     size: String(bytes.byteLength),

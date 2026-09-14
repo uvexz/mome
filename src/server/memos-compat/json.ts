@@ -5,6 +5,32 @@
  */
 import { Code, MemosError } from './errors'
 
+/**
+ * google.protobuf.Timestamp 的 protojson 形态：RFC3339、UTC、`Z` 结尾，
+ * **不带小数秒**。
+ *
+ * 「不带小数秒」不是风格选择，而是硬兼容要求。swift-openapi-runtime 的
+ * `Configuration.dateTranscoder` 默认是 `.iso8601`，也就是
+ * `ISO8601DateTranscoder()`——它构造的 `ISO8601DateFormatter` 沿用 Foundation
+ * 默认的 `.withInternetDateTime`（**不含** `.withFractionalSeconds`）。
+ * `Date.prototype.toISOString()` 产出的 `2026-08-08T12:39:43.541Z` 在这个
+ * formatter 下 `date(from:)` 返回 nil，transcoder 随即抛
+ * `DecodingError.dataCorrupted`（NSCocoaErrorDomain「数据格式不正确」），
+ * 于是**整个响应**解码失败——客户端只报
+ * `Client encountered an error invoking the operation "…"`。
+ *
+ * `InstanceProfile.admin.createTime` 是最先撞上的一个：它在版本探测阶段，
+ * 也就是登录之前，所以表现为"登录报错"。
+ *
+ * 上游 Go 服务用 protojson 输出，秒的小数位为 0 时会被裁掉，所以这类客户端
+ * 只在 Mome 上炸。Memos 自身的时间戳就是秒精度，这里与上游对齐按秒截断。
+ *
+ * 所有对外的时间戳都必须走这个函数；直接用 `toISOString()` 会重新引入该缺陷。
+ */
+export function protoTimestamp(date: Date): string {
+  return `${date.toISOString().slice(0, 19)}Z`
+}
+
 /** 解析客户端提交的 RFC3339 时间戳；非法输入按 INVALID_ARGUMENT 处理 */
 export function parseTimestamp(
   value: unknown,

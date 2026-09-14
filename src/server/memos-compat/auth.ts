@@ -18,6 +18,7 @@ import { auth } from '#/lib/auth'
 import { authenticateApiKeyToken } from '../api-keys-core'
 import { isAdminUser } from '../settings-core'
 import { Code, MemosError } from './errors'
+import { protoTimestamp } from './json'
 
 const ISSUER = 'mome'
 const ACCESS_AUDIENCE = 'user.access-token'
@@ -245,7 +246,7 @@ async function loadActor(userId: string): Promise<CompatActor | null> {
     email: row.email,
     image: row.image,
     bio: row.bio ?? null,
-    createdAt: row.createdAt.toISOString(),
+    createdAt: protoTimestamp(row.createdAt),
     isAdmin: await isAdminUser(row.id),
   }
 }
