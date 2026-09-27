@@ -11,6 +11,7 @@ dist-ssr
 .vinxi
 __unconfig*
 todos.json
+.commandcode
 
 # 数据库文件
 *.db

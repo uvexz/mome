@@ -503,6 +503,24 @@ describe('memos compat memo CRUD', () => {
       (byTime.body.memos as Array<Record<string, unknown>>).length,
     ).toBeGreaterThan(0)
 
+    for (const filter of [
+      'timestamp()',
+      'timestamp(1, 2)',
+      'timestamp("1")',
+      'timestamp(1.5)',
+      'duration()',
+      'duration("1h", "2h")',
+      'duration(1)',
+    ]) {
+      const invalid = await call(
+        'GET',
+        `/api/v1/memos?filter=${encodeURIComponent(`created_ts > ${filter}`)}`,
+        { token: ownerToken },
+      )
+      expect(invalid.status).toBe(400)
+      expect(invalid.body.code).toBe(3)
+    }
+
     const bySize = await call(
       'GET',
       `/api/v1/memos?filter=${encodeURIComponent('size(content) > 5 && pinned != true')}`,
@@ -695,7 +713,19 @@ describe('memos compat users, instance and PAT', () => {
     })
     expect((batch.body.users as unknown[]).length).toBe(2)
 
-    const stats = await call(`GET`, `/api/v1/users/${OWNER_ID}:getStats`, {
+    const forbiddenStats = await call(
+      'GET',
+      `/api/v1/users/${OWNER_ID}:getStats`,
+      { token: otherToken },
+    )
+    expect(forbiddenStats.status).toBe(403)
+
+    const ownStats = await call('GET', `/api/v1/users/${OTHER_ID}:getStats`, {
+      token: otherToken,
+    })
+    expect(ownStats.status).toBe(200)
+
+    const stats = await call('GET', `/api/v1/users/${OWNER_ID}:getStats`, {
       token: ownerToken,
     })
     expect(stats.status).toBe(200)
@@ -755,7 +785,9 @@ describe('memos compat users, instance and PAT', () => {
     expect(res.body.version).toBe('0.30.0')
     expect(res.body.needsSetup).toBe(false)
     // 同一进程内其他测试文件也会创建管理员，这里只断言资源名形态
-    expect((res.body.admin as Record<string, unknown>).name).toMatch(/^users\//)
+    const admin = res.body.admin as Record<string, unknown>
+    expect(admin.name).toMatch(/^users\//)
+    expect(admin.email).toBeUndefined()
   })
 })
 
@@ -790,7 +822,7 @@ describe('memos compat pagination', () => {
     for (const id of created) expect(seen).toContain(id)
   })
 
-  test('accepts legacy offset pageTokens', async () => {
+  test('accepts legacy offset pageTokens and rejects excessive cursors', async () => {
     const legacy = Buffer.from(JSON.stringify({ o: 1 })).toString('base64url')
     const res = await call(
       'GET',
@@ -799,6 +831,26 @@ describe('memos compat pagination', () => {
     )
     expect(res.status).toBe(200)
     expect(Array.isArray(res.body.memos)).toBe(true)
+
+    const excessiveOffset = Buffer.from(
+      JSON.stringify({ o: 100_001 }),
+    ).toString('base64url')
+    const excessive = await call(
+      'GET',
+      `/api/v1/memos?pageToken=${encodeURIComponent(excessiveOffset)}`,
+      { token: ownerToken },
+    )
+    expect(excessive.status).toBe(400)
+    expect(excessive.body.code).toBe(3)
+
+    const oversizedToken = 'a'.repeat(4097)
+    const oversized = await call(
+      'GET',
+      `/api/v1/memos?pageToken=${oversizedToken}`,
+      { token: ownerToken },
+    )
+    expect(oversized.status).toBe(400)
+    expect(oversized.body.code).toBe(3)
   })
 
   test('returns a next page token for users when more rows exist', async () => {
@@ -1331,6 +1383,19 @@ describe('memos compat cookie write origin guard', () => {
         origin: 'https://evil.example.com',
       },
       body: memoBody('csrf attempt'),
+    })
+    expect(res.status).toBe(403)
+    expect(res.body.code).toBe(7)
+  })
+
+  test('does not let non-Bearer authorization bypass cookie origin checks', async () => {
+    const res = await call('POST', '/api/v1/memos', {
+      headers: {
+        authorization: 'Basic dXNlcjpwYXNz',
+        cookie: 'better-auth.session_token=fake',
+        origin: 'https://evil.example.com',
+      },
+      body: memoBody('csrf attempt with Basic auth'),
     })
     expect(res.status).toBe(403)
     expect(res.body.code).toBe(7)

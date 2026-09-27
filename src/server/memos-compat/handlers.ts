@@ -45,6 +45,7 @@ import {
 } from './attachments'
 import {
   authenticate,
+  bearerToken,
   clearRefreshCookie,
   issueAccessToken,
   issueRefreshToken,
@@ -206,14 +207,14 @@ function checkContentLength(content: string): void {
  * cookie 凭据（浏览器会话）驱动的写操作必须来自可信 Origin：
  * SameSite=Lax 不阻止同站不同源页面发出的简单请求。
  *
- * 例外：带 `Authorization` 的请求只按该凭据鉴权——`authenticate()` 命中 Bearer 后
- * 不会回落到 cookie session，令牌无效就直接 401，所以它不构成 CSRF 载体。
+ * 例外：只有非空 Bearer 凭据会被 `authenticate()` 实际采用，不会回落到 cookie session；
+ * 即使令牌无效也直接 401，因此它不构成 CSRF 载体。非 Bearer/空 Bearer 仍需校验来源。
  * 浏览器扩展正是这种形态：用 PAT 鉴权，却会带上目标站点的 cookie（扩展的 host
  * permission 请求不受页面同源策略约束，浏览器会把 cookie jar 一并附上），
  * 此前被这条检查误伤成 403，症状是"连接成功但发不出内容"。
  */
 function assertTrustedOriginForCookieWrite(request: Request): void {
-  if (request.headers.get('authorization')) return
+  if (bearerToken(request)) return
   requireTrustedOrigin(request)
 }
 
@@ -876,6 +877,9 @@ const userStats: Handler = async ({ request, params }) => {
   const actor = await requireActor(request)
   await limitRead(actor)
   const userId = params.user
+  if (userId !== actor.id && !actor.isAdmin) {
+    throw new MemosError(Code.PERMISSION_DENIED, '只能查看自己的统计信息')
+  }
   await loadUserRow(userId)
   const stats = await userStatsForCompat(userId)
   return memosJson({
@@ -1035,7 +1039,7 @@ const instanceProfile: Handler = async () => {
   }
   if (adminRow) {
     const row = await loadUserRow(adminRow.userId)
-    json.admin = userJson(row, { isAdmin: true, includeEmail: true })
+    json.admin = userJson(row, { isAdmin: true, includeEmail: false })
   }
   return memosJson(json)
 }

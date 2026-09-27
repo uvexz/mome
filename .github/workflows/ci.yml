@@ -26,13 +26,13 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      # 每次运行生成随机 secret，杜绝"把 CI 硬编码示例密钥复制到生产"的隐患
+      - run: |
+          printf 'DATABASE_URL=%s\nBETTER_AUTH_URL=%s\nBETTER_AUTH_SECRET=%s\n' \
+            "$DATABASE_URL" "$BETTER_AUTH_URL" "$(openssl rand -hex 32)" > .env.local
       - run: bun run typecheck
       - run: bun run lint
       - run: bun run check
       - run: bun run test
       - run: bun run build
-      # 每次运行生成随机 secret，杜绝"把 CI 硬编码示例密钥复制到生产"的隐患
-      - run: |
-          printf 'DATABASE_URL=%s\nBETTER_AUTH_URL=%s\nBETTER_AUTH_SECRET=%s\n' \
-            "$DATABASE_URL" "$BETTER_AUTH_URL" "$(openssl rand -hex 32)" > .env.local
       - run: bun run db:migrate

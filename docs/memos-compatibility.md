@@ -25,21 +25,23 @@ Drizzle 承载，`/api/v1/*` 提供 Memos v1 的 **REST JSON** 兼容面（camel
 
 Better Auth 是应用层身份事实源；Memos 兼容层在其上做凭据 facade。
 
-| 入口                        | 认证方式                                                           | 说明                                                                                                    |
-| --------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------- |
-| `POST /api/v1/auth/signin`  | `{"passwordCredentials":{"username","password"}}`                  | 校验走 Better Auth（先用户名、失败且输入形如邮箱时回退邮箱登录），返回 Mome 签发的 HS256 access token。 |
-| `Authorization: Bearer ...` | access token（15 分钟）/ `memos_pat_…` / `mome_…`                  | access token 为 `BETTER_AUTH_SECRET` 派生的 HS256 JWT；PAT 与既有 API key 都查库哈希校验。              |
-| cookie session              | Better Auth `HttpOnly` 会话 cookie                                 | 浏览器内已登录的会话可直接调用 `/api/v1/*`，无需另发 token。                                            |
-| refresh                     | `memos_refresh` `HttpOnly` cookie（30 天，`Path=/`，SameSite=Lax） | `POST /api/v1/auth/refresh` 轮换 cookie 并签发新 access token；`signout` 清除 cookie。                  |
+| 入口                        | 认证方式                                                           | 说明                                                                                                                                |
+| --------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /api/v1/auth/signin`  | `{"passwordCredentials":{"username","password"}}`                  | 校验走 Better Auth（先用户名、失败且输入形如邮箱时回退邮箱登录），返回 Mome 签发的 HS256 access token。                             |
+| `Authorization: Bearer ...` | access token（15 分钟）/ `memos_pat_…` / `mome_…`                  | access token 为 `BETTER_AUTH_SECRET` 派生的 HS256 JWT；PAT 与既有 API key 都查库哈希校验。                                          |
+| cookie session              | Better Auth `HttpOnly` 会话 cookie                                 | 浏览器内已登录的会话可直接调用 `/api/v1/*`，无需另发 token。                                                                        |
+| refresh                     | `memos_refresh` `HttpOnly` cookie（30 天，`Path=/`，SameSite=Lax） | `POST /api/v1/auth/refresh` 单次消费并轮换 refresh token、签发新 access token；`signout` 撤销该用户的 refresh token 并清除 cookie。 |
 
 access/refresh token 不是上游 JWT 的字节级 parity（issuer 为 `mome`、密钥独立派生），
-只保证客户端可用。token 无服务端吊销列表：signout 只清 cookie，PAT 可单独撤销。
+只保证客户端可用。refresh token 存储于服务端并在轮换、signout、会话撤销时失效；已签发的
+stateless access JWT 不做即时撤销，登出或改密后仍可能在其 15 分钟有效期剩余时间内使用。
+PAT 可单独撤销。
 
 **写操作的来源校验**：带 cookie 的写请求必须来自可信 Origin（`BETTER_AUTH_URL`，
 非生产环境额外放行 localhost）——SameSite=Lax 挡不住同站不同源页面发出的简单请求。
-带 `Authorization` 的请求不走这条检查：`authenticate()` 命中 Bearer 后不会回落到
-cookie session，令牌无效直接 401，因此不构成 CSRF 载体。浏览器扩展（web-clipper 等）
-用 PAT 发请求时会一并带上目标站点的 cookie，正是这种形态。
+只有 `authenticate()` 实际采用的非空 Bearer 凭据可豁免来源检查：Bearer 不回落到 cookie，
+即使令牌无效也直接 401；非 Bearer 或空 Bearer 会回退到 cookie session，因此仍须校验可信 Origin。
+浏览器扩展（web-clipper 等）用 PAT 发请求时会一并带上目标站点的 cookie，正是这种形态。
 `POST /api/v1/auth/refresh` 与 `signout` 只认 `memos_refresh` cookie，无条件要求可信
 Origin——加一个 Authorization 头不会放宽它们。
 

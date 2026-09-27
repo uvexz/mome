@@ -16,7 +16,12 @@ const PREFIX = 'v1:'
 
 function deriveKey(): Buffer | null {
   const secret = process.env.BETTER_AUTH_SECRET
-  if (!secret) return null
+  if (!secret || secret.length < 32) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('生产环境 BETTER_AUTH_SECRET 至少需要 32 个字符')
+    }
+    return null
+  }
   return createHash('sha256').update(secret).digest()
 }
 

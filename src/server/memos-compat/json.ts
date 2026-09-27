@@ -67,6 +67,9 @@ export interface PageCursor {
   keyset?: { createdAt: number; id: string }
 }
 
+const MAX_PAGE_TOKEN_LENGTH = 4096
+const MAX_PAGE_OFFSET = 100_000
+
 export function encodePageToken(offset: number): string {
   return Buffer.from(JSON.stringify({ o: offset })).toString('base64url')
 }
@@ -79,6 +82,9 @@ export function encodeKeysetPageToken(createdAt: Date, id: string): string {
 
 export function decodePageToken(token: string | null): PageCursor {
   if (!token) return { offset: 0 }
+  if (token.length > MAX_PAGE_TOKEN_LENGTH) {
+    throw new MemosError(Code.INVALID_ARGUMENT, 'pageToken 不合法')
+  }
   try {
     const parsed: unknown = JSON.parse(
       Buffer.from(token, 'base64url').toString(),
@@ -99,7 +105,8 @@ export function decodePageToken(token: string | null): PageCursor {
         if (
           typeof offset === 'number' &&
           Number.isInteger(offset) &&
-          offset >= 0
+          offset >= 0 &&
+          offset <= MAX_PAGE_OFFSET
         ) {
           return { offset }
         }

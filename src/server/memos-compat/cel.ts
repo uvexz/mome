@@ -587,13 +587,19 @@ class Evaluator {
   }): Promise<Value> {
     switch (node.name) {
       case 'timestamp': {
+        if (node.args.length !== 1) fail('timestamp() 需要一个参数')
         const arg = node.args[0]
-        if (arg.k !== 'lit' || typeof arg.v !== 'number') {
+        if (
+          arg.k !== 'lit' ||
+          typeof arg.v !== 'number' ||
+          !Number.isInteger(arg.v)
+        ) {
           fail('timestamp() 只接受整数秒字面量')
         }
         return { t: 'const', v: arg.v * 1000 }
       }
       case 'duration': {
+        if (node.args.length !== 1) fail('duration() 需要一个参数')
         const arg = node.args[0]
         if (arg.k !== 'lit' || typeof arg.v !== 'string') {
           fail('duration() 只接受字符串字面量')

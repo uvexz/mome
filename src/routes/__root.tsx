@@ -7,7 +7,7 @@ import {
   useRouter,
   useRouterState,
 } from '@tanstack/react-router'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import type { ErrorComponentProps } from '@tanstack/react-router'
 import { TanStackRouterDevtoolsPanel } from '@tanstack/react-router-devtools'
@@ -78,11 +78,14 @@ function QuerySessionBoundary({ children }: { children: React.ReactNode }) {
   const { data: session, isPending } = authClient.useSession()
   const initialized = useRef(false)
   const previousUserId = useRef<string | null>(null)
+  const [, setIdentityRevision] = useState(0)
+  const userId = session?.user.id ?? null
+  const identityChanged =
+    initialized.current && previousUserId.current !== userId
 
   useEffect(() => {
     if (isPending) return
-    const userId = session?.user.id ?? null
-    if (initialized.current && previousUserId.current !== userId) {
+    if (identityChanged) {
       // 只清掉已无观察者且不在请求中的查询。queryClient.clear() 会销毁所有
       // 查询并取消进行中的请求，注销/登录后的导航 loader（ensureQueryData）
       // 会被连带取消，路由收到 CancelledError 进入错误页。
@@ -102,7 +105,10 @@ function QuerySessionBoundary({ children }: { children: React.ReactNode }) {
     }
     initialized.current = true
     previousUserId.current = userId
-  }, [isPending, queryClient, session?.user.id])
+    if (identityChanged) setIdentityRevision((revision) => revision + 1)
+  }, [identityChanged, isPending, queryClient, userId])
+
+  if (identityChanged) return null
 
   return (
     <SessionUsernameProvider username={session?.user.username ?? null}>

@@ -12,6 +12,12 @@ const authUrl = process.env.BETTER_AUTH_URL ?? 'http://localhost:3000'
 // 生产环境 fail-fast：漏配 BETTER_AUTH_URL 会让 trustedOrigins/passkey RP
 // 回退到 localhost，登录 Origin 校验与 passkey 全部异常（且错误静默）。
 if (process.env.NODE_ENV === 'production') {
+  if (
+    !process.env.BETTER_AUTH_SECRET ||
+    process.env.BETTER_AUTH_SECRET.length < 32
+  ) {
+    throw new Error('生产环境 BETTER_AUTH_SECRET 至少需要 32 个字符')
+  }
   if (!process.env.BETTER_AUTH_URL) {
     throw new Error('生产环境必须设置 BETTER_AUTH_URL（站点公开地址）')
   }
